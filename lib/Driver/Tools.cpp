@@ -7966,7 +7966,25 @@ void gnutools::Link::ConstructJob(Compilation &C, const JobAction &JA,
           !isAndroid)
         CmdArgs.push_back("-lpthread");
 
+      // For compatibility with the vendor compilers, link
+      // with libdl by default.
+      if (ToolChain.getTriple().getVendor() == llvm::Triple::BGQ &&
+          Args.hasArg(options::OPT_static)) {
+        CmdArgs.push_back("-ldl");
+      }
+
       CmdArgs.push_back("-lc");
+
+      // BG/Q libc, etc. pulls in some of these things...
+      if (ToolChain.getTriple().getVendor() == llvm::Triple::BGQ &&
+          Args.hasArg(options::OPT_static)) {
+        // Note: BG/Q drivers prior to V1R2M2 also required:
+        //   CmdArgs.push_back("-lnss_files");
+        //   CmdArgs.push_back("-lnss_dns");
+        // but as of V1R2M2, this is no longer true.
+        CmdArgs.push_back("-lresolv");
+        CmdArgs.push_back("-lm");
+      }
 
       if (Args.hasArg(options::OPT_static))
         CmdArgs.push_back("--end-group");

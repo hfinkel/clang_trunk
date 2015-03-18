@@ -1245,6 +1245,8 @@ Generic_GCC::GCCInstallationDetector::init( const Driver &D,
       Prefixes.push_back(D.SysRoot + "/usr");
     }
 
+    Prefixes.push_back(D.SysRoot);
+    Prefixes.push_back(D.SysRoot + "/usr");
     // Then look for gcc installed alongside clang.
     Prefixes.push_back(D.InstalledDir + "/..");
 
@@ -2824,7 +2826,8 @@ static Distro DetectDistro(llvm::Triple::ArchType Arch) {
           .Case("saucy", UbuntuSaucy)
           .Case("trusty", UbuntuTrusty)
           .Default(UnknownDistro);
-    return Version;
+    if (Version != UnknownDistro)
+      return Version;
   }
 
   File = llvm::MemoryBuffer::getFile("/etc/redhat-release");
@@ -3470,6 +3473,27 @@ void Linux::AddClangCXXStdlibIncludeArgs(const ArgList &DriverArgs,
                                  Multilib.includeSuffix(), DriverArgs, CC1Args))
       break;
   }
+}
+
+void Linux::AddCXXStdlibLibArgs(const ArgList &Args,
+                                ArgStringList &CmdArgs) const {
+  if (getTriple().getVendor() != llvm::Triple::BGQ) {
+    Generic_ELF::AddCXXStdlibLibArgs(Args, CmdArgs);
+    return;
+  }
+
+  if (GetCXXStdlibType(Args) == ToolChain::CST_Libcxx) {
+    CmdArgs.push_back("-lc++");
+
+    // For static linking, we also need to explicitly link to libstdc++
+    // for the cxxabi exception objects.
+    if (Args.hasArg(options::OPT_static)) {
+      CmdArgs.push_back("-lrt");
+      CmdArgs.push_back("-lpthread");
+    }
+  }
+
+  CmdArgs.push_back("-lstdc++");
 }
 
 bool Linux::isPIEDefault() const {
