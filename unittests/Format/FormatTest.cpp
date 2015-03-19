@@ -3774,6 +3774,16 @@ TEST_F(FormatTest, BreaksFunctionDeclarations) {
       "typename aaaaaaaaaa<aaaaaa>::aaaaaaaaaaa\n"
       "aaaaaaaaaa<aaaaaa>::aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa(\n"
       "    bool *aaaaaaaaaaaaaaaaaa, bool *aa) {}");
+
+  FormatStyle Style = getLLVMStyle();
+  Style.PointerAlignment = FormatStyle::PAS_Left;
+  verifyFormat("void aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa(\n"
+               "    aaaaaaaaaaaaaaaaaaaaaaaaa* const aaaaaaaaaaaa) {}",
+               Style);
+  verifyFormat(
+      "void aaaaaaa(aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa*\n"
+      "                 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) {}",
+      Style);
 }
 
 TEST_F(FormatTest, TrailingReturnType) {
