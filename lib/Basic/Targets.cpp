@@ -713,8 +713,7 @@ public:
     // RegParmMax is inherited from the underlying architecture
     this->LongDoubleFormat = &llvm::APFloat::IEEEdouble;
     if (Triple.getArch() == llvm::Triple::arm) {
-      this->DescriptionString =
-          "e-m:e-p:32:32-i64:64-v128:64:128-a:0:32-n32-S128";
+      // Handled in ARM's setABI().
     } else if (Triple.getArch() == llvm::Triple::x86) {
       this->DescriptionString = "e-m:e-p:32:32-i64:64-n8:16:32-S128";
     } else if (Triple.getArch() == llvm::Triple::x86_64) {
@@ -1477,6 +1476,7 @@ public:
     GK_SM21,
     GK_SM30,
     GK_SM35,
+    GK_SM37,
   } GPU;
 
   public:
@@ -1511,6 +1511,9 @@ public:
           break;
         case GK_SM35:
           CUDAArchCode = "350";
+          break;
+        case GK_SM37:
+          CUDAArchCode = "370";
           break;
         default:
           llvm_unreachable("Unhandled target CPU");
@@ -1564,6 +1567,7 @@ public:
                 .Case("sm_21", GK_SM21)
                 .Case("sm_30", GK_SM30)
                 .Case("sm_35", GK_SM35)
+                .Case("sm_37", GK_SM37)
                 .Default(GK_NONE);
 
       return GPU != GK_NONE;
@@ -3897,6 +3901,9 @@ class ARMTargetInfo : public TargetInfo {
                           "-a:0:32"
                           "-n32"
                           "-S64";
+    } else if (T.isOSNaCl()) {
+      assert(!BigEndian && "NaCl on ARM does not support big endian");
+      DescriptionString = "e-m:e-p:32:32-i64:64-v128:64:128-a:0:32-n32-S128";
     } else {
       DescriptionString =
           BigEndian ? "E-m:e-p:32:32-i64:64-v128:64:128-a:0:32-n32-S64"
@@ -5404,6 +5411,8 @@ class SystemZTargetInfo : public TargetInfo {
 
 public:
   SystemZTargetInfo(const llvm::Triple &Triple) : TargetInfo(Triple) {
+    IntMaxType = SignedLong;
+    Int64Type = SignedLong;
     TLSSupported = true;
     IntWidth = IntAlign = 32;
     LongWidth = LongLongWidth = LongAlign = LongLongAlign = 64;
@@ -5857,7 +5866,28 @@ public:
     case 'R': // An address that can be used in a non-macro load or store
       Info.setAllowsMemory();
       return true;
+    case 'Z':
+      if (Name[1] == 'C') { // An address usable by ll, and sc.
+        Info.setAllowsMemory();
+        Name++; // Skip over 'Z'.
+        return true;
+      }
+      return false;
     }
+  }
+
+  std::string convertConstraint(const char *&Constraint) const override {
+    std::string R;
+    switch (*Constraint) {
+    case 'Z': // Two-character constraint; add "^" hint for later parsing.
+      if (Constraint[1] == 'C') {
+        R = std::string("^") + std::string(Constraint, 2);
+        Constraint++;
+        return R;
+      }
+      break;
+    }
+    return TargetInfo::convertConstraint(Constraint);
   }
 
   const char *getClobbers() const override {
