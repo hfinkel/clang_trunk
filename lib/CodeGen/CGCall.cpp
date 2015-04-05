@@ -734,7 +734,8 @@ void CodeGenFunction::ExpandTypeFromArgs(
   auto Exp = getTypeExpansion(Ty, getContext());
   if (auto CAExp = dyn_cast<ConstantArrayExpansion>(Exp.get())) {
     for (int i = 0, n = CAExp->NumElts; i < n; i++) {
-      llvm::Value *EltAddr = Builder.CreateConstGEP2_32(LV.getAddress(), 0, i);
+      llvm::Value *EltAddr =
+          Builder.CreateConstGEP2_32(nullptr, LV.getAddress(), 0, i);
       LValue LV = MakeAddrLValue(EltAddr, CAExp->EltTy);
       ExpandTypeFromArgs(CAExp->EltTy, LV, AI);
     }
@@ -775,7 +776,7 @@ void CodeGenFunction::ExpandTypeToArgs(
   if (auto CAExp = dyn_cast<ConstantArrayExpansion>(Exp.get())) {
     llvm::Value *Addr = RV.getAggregateAddr();
     for (int i = 0, n = CAExp->NumElts; i < n; i++) {
-      llvm::Value *EltAddr = Builder.CreateConstGEP2_32(Addr, 0, i);
+      llvm::Value *EltAddr = Builder.CreateConstGEP2_32(nullptr, Addr, 0, i);
       RValue EltRV =
           convertTempToRValue(EltAddr, CAExp->EltTy, SourceLocation());
       ExpandTypeToArgs(CAExp->EltTy, EltRV, IRFuncTy, IRCallArgs, IRCallArgPos);
@@ -843,7 +844,7 @@ EnterStructPointerForCoercedAccess(llvm::Value *SrcPtr,
     return SrcPtr;
 
   // GEP into the first element.
-  SrcPtr = CGF.Builder.CreateConstGEP2_32(SrcPtr, 0, 0, "coerce.dive");
+  SrcPtr = CGF.Builder.CreateConstGEP2_32(SrcSTy, SrcPtr, 0, 0, "coerce.dive");
 
   // If the first element is a struct, recurse.
   llvm::Type *SrcTy =
@@ -981,7 +982,7 @@ static void BuildAggStore(CodeGenFunction &CGF, llvm::Value *Val,
   if (llvm::StructType *STy =
         dyn_cast<llvm::StructType>(Val->getType())) {
     for (unsigned i = 0, e = STy->getNumElements(); i != e; ++i) {
-      llvm::Value *EltPtr = CGF.Builder.CreateConstGEP2_32(DestPtr, 0, i);
+      llvm::Value *EltPtr = CGF.Builder.CreateConstGEP2_32(STy, DestPtr, 0, i);
       llvm::Value *Elt = CGF.Builder.CreateExtractValue(Val, i);
       llvm::StoreInst *SI = CGF.Builder.CreateStore(Elt, EltPtr,
                                                     DestIsVolatile);
@@ -1939,7 +1940,7 @@ void CodeGenFunction::EmitFunctionProlog(const CGFunctionInfo &FI,
       // If the value is offset in memory, apply the offset now.
       if (unsigned Offs = ArgI.getDirectOffset()) {
         Ptr = Builder.CreateBitCast(Ptr, Builder.getInt8PtrTy());
-        Ptr = Builder.CreateConstGEP1_32(Ptr, Offs);
+        Ptr = Builder.CreateConstGEP1_32(Builder.getInt8Ty(), Ptr, Offs);
         Ptr = Builder.CreateBitCast(Ptr,
                           llvm::PointerType::getUnqual(ArgI.getCoerceToType()));
       }
@@ -1961,7 +1962,7 @@ void CodeGenFunction::EmitFunctionProlog(const CGFunctionInfo &FI,
           for (unsigned i = 0, e = STy->getNumElements(); i != e; ++i) {
             auto AI = FnArgs[FirstIRArg + i];
             AI->setName(Arg->getName() + ".coerce" + Twine(i));
-            llvm::Value *EltPtr = Builder.CreateConstGEP2_32(Ptr, 0, i);
+            llvm::Value *EltPtr = Builder.CreateConstGEP2_32(STy, Ptr, 0, i);
             Builder.CreateStore(AI, EltPtr);
           }
         } else {
@@ -1974,7 +1975,8 @@ void CodeGenFunction::EmitFunctionProlog(const CGFunctionInfo &FI,
           for (unsigned i = 0, e = STy->getNumElements(); i != e; ++i) {
             auto AI = FnArgs[FirstIRArg + i];
             AI->setName(Arg->getName() + ".coerce" + Twine(i));
-            llvm::Value *EltPtr = Builder.CreateConstGEP2_32(TempV, 0, i);
+            llvm::Value *EltPtr =
+                Builder.CreateConstGEP2_32(ArgI.getCoerceToType(), TempV, 0, i);
             Builder.CreateStore(AI, EltPtr);
           }
 
@@ -2334,7 +2336,7 @@ void CodeGenFunction::EmitFunctionEpilog(const CGFunctionInfo &FI,
       // If the value is offset in memory, apply the offset now.
       if (unsigned Offs = RetAI.getDirectOffset()) {
         V = Builder.CreateBitCast(V, Builder.getInt8PtrTy());
-        V = Builder.CreateConstGEP1_32(V, Offs);
+        V = Builder.CreateConstGEP1_32(Builder.getInt8Ty(), V, Offs);
         V = Builder.CreateBitCast(V,
                          llvm::PointerType::getUnqual(RetAI.getCoerceToType()));
       }
@@ -3201,7 +3203,7 @@ RValue CodeGenFunction::EmitCall(const CGFunctionInfo &CallInfo,
       // If the value is offset in memory, apply the offset now.
       if (unsigned Offs = ArgInfo.getDirectOffset()) {
         SrcPtr = Builder.CreateBitCast(SrcPtr, Builder.getInt8PtrTy());
-        SrcPtr = Builder.CreateConstGEP1_32(SrcPtr, Offs);
+        SrcPtr = Builder.CreateConstGEP1_32(Builder.getInt8Ty(), SrcPtr, Offs);
         SrcPtr = Builder.CreateBitCast(SrcPtr,
                        llvm::PointerType::getUnqual(ArgInfo.getCoerceToType()));
 
@@ -3233,7 +3235,7 @@ RValue CodeGenFunction::EmitCall(const CGFunctionInfo &CallInfo,
 
         assert(NumIRArgs == STy->getNumElements());
         for (unsigned i = 0, e = STy->getNumElements(); i != e; ++i) {
-          llvm::Value *EltPtr = Builder.CreateConstGEP2_32(SrcPtr, 0, i);
+          llvm::Value *EltPtr = Builder.CreateConstGEP2_32(STy, SrcPtr, 0, i);
           llvm::LoadInst *LI = Builder.CreateLoad(EltPtr);
           // We don't know what we're loading from.
           LI->setAlignment(1);
@@ -3463,7 +3465,8 @@ RValue CodeGenFunction::EmitCall(const CGFunctionInfo &CallInfo,
       llvm::Value *StorePtr = DestPtr;
       if (unsigned Offs = RetAI.getDirectOffset()) {
         StorePtr = Builder.CreateBitCast(StorePtr, Builder.getInt8PtrTy());
-        StorePtr = Builder.CreateConstGEP1_32(StorePtr, Offs);
+        StorePtr =
+            Builder.CreateConstGEP1_32(Builder.getInt8Ty(), StorePtr, Offs);
         StorePtr = Builder.CreateBitCast(StorePtr,
                            llvm::PointerType::getUnqual(RetAI.getCoerceToType()));
       }
