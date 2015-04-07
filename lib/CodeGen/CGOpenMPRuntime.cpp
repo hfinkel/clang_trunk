@@ -103,8 +103,8 @@ llvm::Value *CGOpenMPRuntime::EmitOpenMPUpdateLocation(
   }
 
   // char **psource = &.kmpc_loc_<flags>.addr.psource;
-  llvm::Value *PSource =
-      CGF.Builder.CreateConstInBoundsGEP2_32(LocValue, 0, IdentField_PSource);
+  auto *PSource = CGF.Builder.CreateConstInBoundsGEP2_32(IdentTy, LocValue, 0,
+                                                         IdentField_PSource);
 
   auto OMPDebugLoc = OpenMPDebugLocMap.lookup(Loc.getRawEncoding());
   if (OMPDebugLoc == nullptr) {
@@ -625,7 +625,8 @@ void CGOpenMPRuntime::PostProcessTargetFunction(const Decl *D,
 }
 
 static llvm::Value *GEP(CGBuilderTy &B, llvm::Value *Base, int field) {
-  return B.CreateConstInBoundsGEP2_32(Base, 0, field);
+  return B.CreateConstInBoundsGEP2_32(Base->getType()->getPointerElementType(),
+                                      Base, 0, field);
 }
 
 static void StoreField(CGBuilderTy &B, llvm::Value *Val, llvm::Value *Dst,
