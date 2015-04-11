@@ -3354,11 +3354,6 @@ ASTReader::ReadASTBlock(ModuleFile &F, unsigned ClientLoadCapabilities) {
       break;
     }
 
-    case MACRO_TABLE: {
-      // FIXME: Not used yet.
-      break;
-    }
-
     case LATE_PARSED_TEMPLATE: {
       LateParsedTemplates.append(Record.begin(), Record.end());
       break;
@@ -4754,6 +4749,12 @@ bool ASTReader::ParseLanguageOptions(const RecordData &Record,
   }
   LangOpts.CommentOpts.ParseAllComments = Record[Idx++];
 
+  // OpenMP options
+  LangOpts.OMPModuleUniqueID = ReadString(Record, Idx);
+  for (unsigned N = Record[Idx++]; N; --N) {
+    LangOpts.OMPTargetTriples.push_back(
+        llvm::Triple(ReadString(Record, Idx)));
+  }
   return Listener.ReadLanguageOptions(LangOpts, Complain,
                                       AllowCompatibleDifferences);
 }
@@ -8673,7 +8674,10 @@ void ASTReader::pushExternalDeclIntoScope(NamedDecl *D, DeclarationName Name) {
     if (It != PendingFakeLookupResults.end()) {
       for (auto *ND : PendingFakeLookupResults[II])
         SemaObj->IdResolver.RemoveDecl(ND);
-      PendingFakeLookupResults.erase(It);
+      // FIXME: this works around module+PCH performance issue.
+      // Rather than erase the result from the map, which is O(n), just clear
+      // the vector of NamedDecls.
+      It->second.clear();
     }
   }
 

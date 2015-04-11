@@ -241,7 +241,8 @@ public:
   };
   /// \brief API for captured statement code generation for OpenMP regions.
   class CGOpenMPCapturedStmtInfo : public CGCapturedStmtInfo {
-    //CodeGenModule &CGM;
+    typedef llvm::SmallDenseMap<const VarDecl *, llvm::Value*> CachedVarsTy;
+
   public:
     explicit CGOpenMPCapturedStmtInfo(llvm::Value* Context,
                                       const CapturedStmt &S,
@@ -251,13 +252,16 @@ public:
 
     virtual ~CGOpenMPCapturedStmtInfo() { };
 
-    virtual void addCachedVar(const VarDecl *VD, llvm::Value *Addr) { CachedVars[VD] = Addr; }
-    virtual llvm::Value *getCachedVar(const VarDecl *VD) { return CachedVars[VD]; }
+    virtual void addCachedVar(const VarDecl *VD, llvm::Value *Addr) override {
+      CachedVars[VD] = Addr;
+    }
+    virtual llvm::Value *getCachedVar(const VarDecl *VD) override {
+      return CachedVars.lookup(VD);
+    }
   private:
 
-    /// \brief Keep the map between VarDecl and FieldDecl.
-    llvm::SmallDenseMap<const VarDecl *, llvm::Value *> CachedVars;
-
+    /// \brief Keep the map between VarDecl and corresponding Value.
+    CachedVarsTy CachedVars;
   };
 
   CGCapturedStmtInfo *CapturedStmtInfo;
@@ -427,6 +431,10 @@ public:
   /// potentially set the return value.
   bool SawAsmBlock;
 
+  /// True if the current function is an outlined SEH helper. This can be a
+  /// finally block or filter expression.
+  bool IsOutlinedSEHHelper;
+
   const CodeGen::CGBlockInfo *BlockInfo;
   llvm::Value *BlockPointer;
 
@@ -513,17 +521,6 @@ public:
                llvm::Constant *beginCatchFn, llvm::Constant *endCatchFn,
                llvm::Constant *rethrowFn);
     void exit(CodeGenFunction &CGF);
-  };
-
-  /// Cleanups can be emitted for two reasons: normal control leaving a region
-  /// exceptional control flow leaving a region.
-  struct SEHFinallyInfo {
-    SEHFinallyInfo()
-        : FinallyBB(nullptr), ContBB(nullptr), ResumeBB(nullptr) {}
-
-    llvm::BasicBlock *FinallyBB;
-    llvm::BasicBlock *ContBB;
-    llvm::BasicBlock *ResumeBB;
   };
 
   /// Returns true inside SEH __try blocks.
@@ -1172,10 +1169,6 @@ public:
   /// which is assigned in every landing pad.
   llvm::Value *getExceptionSlot();
   llvm::Value *getEHSelectorSlot();
-
-  /// Stack slot that contains whether a __finally block is being executed as an
-  /// EH cleanup or as a normal cleanup.
-  llvm::Value *getAbnormalTerminationSlot();
 
   /// Returns the contents of the function's exception object and selector
   /// slots.
@@ -1865,6 +1858,9 @@ public:
   void EmitCXXTemporary(const CXXTemporary *Temporary, QualType TempType,
                         llvm::Value *Ptr);
 
+  llvm::Value *EmitLifetimeStart(uint64_t Size, llvm::Value *Addr);
+  void EmitLifetimeEnd(llvm::Value *Size, llvm::Value *Addr);
+
   llvm::Value *EmitCXXNewExpr(const CXXNewExpr *E);
   void EmitCXXDeleteExpr(const CXXDeleteExpr *E);
 
@@ -2124,11 +2120,18 @@ public:
   void EmitCXXTryStmt(const CXXTryStmt &S);
   void EmitSEHTryStmt(const SEHTryStmt &S);
   void EmitSEHLeaveStmt(const SEHLeaveStmt &S);
-  void EnterSEHTryStmt(const SEHTryStmt &S, SEHFinallyInfo &FI);
-  void ExitSEHTryStmt(const SEHTryStmt &S, SEHFinallyInfo &FI);
+  void EnterSEHTryStmt(const SEHTryStmt &S);
+  void ExitSEHTryStmt(const SEHTryStmt &S);
+
+  void startOutlinedSEHHelper(CodeGenFunction &ParentCGF, StringRef Name,
+                              QualType RetTy, FunctionArgList &Args,
+                              const Stmt *OutlinedStmt);
 
   llvm::Function *GenerateSEHFilterFunction(CodeGenFunction &ParentCGF,
                                             const SEHExceptStmt &Except);
+
+  llvm::Function *GenerateSEHFinallyFunction(CodeGenFunction &ParentCGF,
+                                             const SEHFinallyStmt &Finally);
 
   void EmitSEHExceptionCodeSave();
   llvm::Value *EmitSEHExceptionCode();
@@ -2146,7 +2149,18 @@ public:
 
   LValue InitCapturedStruct(const CapturedStmt &S);
   void InitOpenMPFunction(llvm::Value *Context, const CapturedStmt &S);
-  void InitOpenMPTargetFunction(const CapturedStmt &S);
+  void InitOpenMPTargetFunction(const OMPExecutableDirective &D,
+                                const CapturedStmt &S,
+                                SmallVector<llvm::Value**, 8> &VLAToLoad);
+  void InitOpenMPSharedizeParameters(const CapturedStmt &S,
+                                     SmallVector<const VarDecl *, 8> &MappingDecls,
+                                     SmallVector<llvm::Value *, 8>   &MappingDeclVals,
+                                     SmallVector<llvm::Value**, 8>   &VLAExprLocs,
+                                     SmallVector<llvm::Value *, 8>   &VLAExprVals);
+  bool ShouldIgnoreOpenMPCapture(const OMPExecutableDirective &S,
+                                 OpenMPDirectiveKind CurrentD,
+                                 const DeclRefExpr *DE);
+
   llvm::Function *EmitCapturedStmt(const CapturedStmt &S, CapturedRegionKind K);
   llvm::Function *GenerateCapturedStmtFunction(const CapturedStmt &S);
   llvm::Value *GenerateCapturedStmtArgument(const CapturedStmt &S);
@@ -2219,8 +2233,19 @@ public:
   void EmitInitOMPProcBindClause(const OMPProcBindClause &C,
                                  const OMPExecutableDirective &S);
   void EmitInitOMPDeviceClause(const OMPDeviceClause &C,
-                               const OMPExecutableDirective &S);
+                            const OMPExecutableDirective &S);
+  void AppendOpenMPStackWithMapInfo(const OMPClause &C);
   void EmitInitOMPMapClause(const OMPMapClause &C,
+                            const OMPExecutableDirective &S);
+  void EmitAfterOMPMapClause(const OMPMapClause &C,
+                             const OMPExecutableDirective &S);
+  void EmitPreOMPMapClause(const OMPMapClause &C,
+                            const OMPExecutableDirective &S);
+  void EmitPostOMPMapClause(const OMPMapClause &C,
+                            const OMPExecutableDirective &S);
+  void EmitInitOMPToClause(const OMPToClause &C,
+                            const OMPExecutableDirective &S);
+  void EmitInitOMPFromClause(const OMPFromClause &C,
                             const OMPExecutableDirective &S);
   void EmitAfterInitOMPIfClause(const OMPIfClause &C,
                                 const OMPExecutableDirective &S);
@@ -2302,9 +2327,26 @@ public:
     OpenMPDirectiveKind DKind,
     ArrayRef<OpenMPDirectiveKind> SKinds,
     const OMPExecutableDirective &S);
+  void EmitOMPDirectiveWithParallelNoMicrotask(
+    OpenMPDirectiveKind DKind,
+    ArrayRef<OpenMPDirectiveKind> SKinds,
+    const OMPExecutableDirective &S);
+  void EmitOMPDirectiveWithParallelMicrotask(
+    OpenMPDirectiveKind DKind,
+    ArrayRef<OpenMPDirectiveKind> SKinds,
+    const OMPExecutableDirective &S);
   void EmitOMPDirectiveWithTeams(OpenMPDirectiveKind DKind,
-                                 ArrayRef<OpenMPDirectiveKind> SKinds,
+                                 OpenMPDirectiveKind SKind,
                                  const OMPExecutableDirective &S);
+  void EmitOMPDirectiveWithTeamsNoMicrotask(OpenMPDirectiveKind DKind,
+                                          OpenMPDirectiveKind SKind,
+                                          const OMPExecutableDirective &S);
+  void EmitOMPDirectiveWithTeamsMicrotask(OpenMPDirectiveKind DKind,
+                                           OpenMPDirectiveKind SKind,
+                                           const OMPExecutableDirective &S);
+  void EmitOMPDirectiveWithTarget(OpenMPDirectiveKind DKind,
+                                  OpenMPDirectiveKind SKind,
+                                  const OMPExecutableDirective &S);
   void EmitOMPBarrier(SourceLocation L, unsigned Flags);
   void EmitOMPCancelBarrier(SourceLocation L, unsigned Flags,
                             bool IgnoreResult = false);

@@ -93,7 +93,7 @@ static bool isLocalContainerContext(const DeclContext *DC) {
 
 static const RecordDecl *GetLocalClassDecl(const Decl *D) {
   const DeclContext *DC = getEffectiveDeclContext(D);
-  while (!DC->isNamespace() && !DC->isTranslationUnit()) {
+  while (!DC->isNamespace() && !DC->isTranslationUnitOrDeclareTarget()) {
     if (isLocalContainerContext(DC))
       return dyn_cast<RecordDecl>(D);
     D = cast<Decl>(DC);
@@ -169,6 +169,8 @@ public:
                                      raw_ostream &Out) override;
   void mangleSEHFilterExpression(const NamedDecl *EnclosingDecl,
                                  raw_ostream &Out) override;
+  void mangleSEHFinallyBlock(const NamedDecl *EnclosingDecl,
+                             raw_ostream &Out) override;
   void mangleItaniumThreadLocalInit(const VarDecl *D, raw_ostream &) override;
   void mangleItaniumThreadLocalWrapper(const VarDecl *D,
                                        raw_ostream &) override;
@@ -447,10 +449,11 @@ bool ItaniumMangleContextImpl::shouldMangleCXXName(const NamedDecl *D) {
     const DeclContext *DC = getEffectiveDeclContext(D);
     // Check for extern variable declared locally.
     if (DC->isFunctionOrMethod() && D->hasLinkage())
-      while (!DC->isNamespace() && !DC->isTranslationUnit())
+      while (!DC->isNamespace() && !DC->isTranslationUnitOrDeclareTarget())
         DC = getEffectiveParentContext(DC);
-    if (DC->isTranslationUnit() && D->getFormalLinkage() != InternalLinkage &&
-        !isa<VarTemplateSpecializationDecl>(D))
+    if ((DC->isTranslationUnitOrDeclareTarget())
+        && D->getFormalLinkage() != InternalLinkage
+        && !isa<VarTemplateSpecializationDecl>(D))
       return false;
   }
 
@@ -540,7 +543,7 @@ static const DeclContext *IgnoreLinkageSpecDecls(const DeclContext *DC) {
 /// isStd - Return whether a given namespace is the 'std' namespace.
 static bool isStd(const NamespaceDecl *NS) {
   if (!IgnoreLinkageSpecDecls(getEffectiveParentContext(NS))
-                                ->isTranslationUnit())
+                                ->isTranslationUnitOrDeclareTarget())
     return false;
   
   const IdentifierInfo *II = NS->getOriginalNamespace()->getIdentifier();
@@ -596,7 +599,7 @@ void CXXNameMangler::mangleName(const NamedDecl *ND) {
   // FIXME: This is a hack; extern variables declared locally should have
   // a proper semantic declaration context!
   if (isLocalContainerContext(DC) && ND->hasLinkage() && !isLambda(ND))
-    while (!DC->isNamespace() && !DC->isTranslationUnit())
+    while (!DC->isNamespace() && !DC->isTranslationUnitOrDeclareTarget())
       DC = getEffectiveParentContext(DC);
   else if (GetLocalClassDecl(ND)) {
     mangleLocalName(ND);
@@ -605,7 +608,7 @@ void CXXNameMangler::mangleName(const NamedDecl *ND) {
 
   DC = IgnoreLinkageSpecDecls(DC);
 
-  if (DC->isTranslationUnit() || isStdNamespace(DC)) {
+  if (DC->isTranslationUnitOrDeclareTarget() || isStdNamespace(DC)) {
     // Check if we have a template.
     const TemplateArgumentList *TemplateArgs = nullptr;
     if (const TemplateDecl *TD = isTemplate(ND, TemplateArgs)) {
@@ -630,7 +633,7 @@ void CXXNameMangler::mangleName(const TemplateDecl *TD,
                                 unsigned NumTemplateArgs) {
   const DeclContext *DC = IgnoreLinkageSpecDecls(getEffectiveDeclContext(TD));
 
-  if (DC->isTranslationUnit() || isStdNamespace(DC)) {
+  if (DC->isTranslationUnitOrDeclareTarget() || isStdNamespace(DC)) {
     mangleUnscopedTemplateName(TD);
     mangleTemplateArgs(TemplateArgs, NumTemplateArgs);
   } else {
@@ -3965,6 +3968,16 @@ void ItaniumMangleContextImpl::mangleSEHFilterExpression(
     const NamedDecl *EnclosingDecl, raw_ostream &Out) {
   CXXNameMangler Mangler(*this, Out);
   Mangler.getStream() << "__filt_";
+  if (shouldMangleDeclName(EnclosingDecl))
+    Mangler.mangle(EnclosingDecl);
+  else
+    Mangler.getStream() << EnclosingDecl->getName();
+}
+
+void ItaniumMangleContextImpl::mangleSEHFinallyBlock(
+    const NamedDecl *EnclosingDecl, raw_ostream &Out) {
+  CXXNameMangler Mangler(*this, Out);
+  Mangler.getStream() << "__fin_";
   if (shouldMangleDeclName(EnclosingDecl))
     Mangler.mangle(EnclosingDecl);
   else

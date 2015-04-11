@@ -2459,7 +2459,7 @@ bool FunctionDecl::isReservedGlobalPlacementOperator() const {
          getDeclName().getCXXOverloadedOperator() == OO_Array_New ||
          getDeclName().getCXXOverloadedOperator() == OO_Array_Delete);
 
-  if (!getDeclContext()->getRedeclContext()->isTranslationUnit())
+  if (!getDeclContext()->getRedeclContext()->isTranslationUnitOrDeclareTarget())
     return false;
 
   const FunctionProtoType *proto = getType()->castAs<FunctionProtoType>();
@@ -2488,7 +2488,7 @@ bool FunctionDecl::isReplaceableGlobalAllocationFunction() const {
     return false;
 
   // This can only fail for an invalid 'operator new' declaration.
-  if (!getDeclContext()->getRedeclContext()->isTranslationUnit())
+  if (!getDeclContext()->getRedeclContext()->isTranslationUnitOrDeclareTarget())
     return false;
 
   const FunctionProtoType *FPT = getType()->castAs<FunctionProtoType>();
@@ -2726,7 +2726,7 @@ static bool redeclForcesDefMSVC(const FunctionDecl *Redecl) {
 
 static bool RedeclForcesDefC99(const FunctionDecl *Redecl) {
   // Only consider file-scope declarations in this test.
-  if (!Redecl->getLexicalDeclContext()->isTranslationUnit())
+  if (!Redecl->getLexicalDeclContext()->isTranslationUnitOrDeclareTarget())
     return false;
 
   // Only consider explicit declarations; the presence of a builtin for a
@@ -2824,6 +2824,18 @@ SourceRange FunctionDecl::getReturnTypeSourceRange() const {
     return SourceRange();
 
   return RTRange;
+}
+
+bool FunctionDecl::hasUnusedResultAttr() const {
+  QualType RetType = getReturnType();
+  if (RetType->isRecordType()) {
+    const CXXRecordDecl *Ret = RetType->getAsCXXRecordDecl();
+    const CXXMethodDecl *MD = dyn_cast<CXXMethodDecl>(this);
+    if (Ret && Ret->hasAttr<WarnUnusedResultAttr>() &&
+        !(MD && MD->getCorrespondingMethodInClass(Ret, true)))
+      return true;
+  }
+  return hasAttr<WarnUnusedResultAttr>();
 }
 
 /// \brief For an inline function definition in C, or for a gnu_inline function

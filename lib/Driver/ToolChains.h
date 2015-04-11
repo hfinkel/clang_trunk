@@ -155,7 +155,7 @@ public:
   Generic_GCC(const Driver &D, const llvm::Triple &Triple,
               const llvm::opt::ArgList &Args,
               bool IsOpenMPTargetToolchain = false);
-  ~Generic_GCC();
+  ~Generic_GCC() override;
 
   void printVerboseInfo(raw_ostream &OS) const override;
 
@@ -169,7 +169,7 @@ public:
   TranslateArgs(const llvm::opt::DerivedArgList &Args,
                 const char *BoundArch,
                 bool isOpenMPTarget,
-                bool &isSuccess) const;
+                bool &isSuccess) const override;
 
 protected:
   Tool *getTool(Action::ActionClass AC) const override;
@@ -205,7 +205,7 @@ private:
 public:
   MachO(const Driver &D, const llvm::Triple &Triple,
              const llvm::opt::ArgList &Args);
-  ~MachO();
+  ~MachO() override;
 
   /// @name MachO specific toolchain API
   /// {
@@ -356,7 +356,7 @@ private:
 public:
   Darwin(const Driver &D, const llvm::Triple &Triple,
          const llvm::opt::ArgList &Args);
-  ~Darwin();
+  ~Darwin() override;
 
   std::string ComputeEffectiveClangTriple(const llvm::opt::ArgList &Args,
                                           types::ID InputType) const override;
@@ -500,8 +500,7 @@ public:
   AddCCKextLibArgs(const llvm::opt::ArgList &Args,
                    llvm::opt::ArgStringList &CmdArgs) const override;
 
-  virtual void addClangWarningOptions(llvm::opt::ArgStringList &CC1Args)
-                                                      const override;
+  void addClangWarningOptions(llvm::opt::ArgStringList &CC1Args) const override;
 
   void
   AddLinkARCArgs(const llvm::opt::ArgList &Args,
@@ -718,7 +717,7 @@ protected:
 public:
   Hexagon_TC(const Driver &D, const llvm::Triple &Triple,
              const llvm::opt::ArgList &Args);
-  ~Hexagon_TC();
+  ~Hexagon_TC() override;
 
   void
   AddClangSystemIncludeArgs(const llvm::opt::ArgList &DriverArgs,
@@ -781,7 +780,7 @@ class LLVM_LIBRARY_VISIBILITY TCEToolChain : public ToolChain {
 public:
   TCEToolChain(const Driver &D, const llvm::Triple &Triple,
                const llvm::opt::ArgList &Args);
-  ~TCEToolChain();
+  ~TCEToolChain() override;
 
   bool IsMathErrnoDefault() const override;
   bool isPICDefault() const override;
@@ -889,6 +888,7 @@ public:
   virtual bool isPICDefaultForced() const;
   virtual bool SupportsProfiling() const;
   virtual bool hasBlocksRuntime() const;
+  virtual bool UseHostToolChainInstead(const JobAction *JA) const;
 //  virtual void AddClangSystemIncludeArgs(const llvm::opt::ArgList &DriverArgs,
 //                            llvm::opt::ArgStringList &CC1Args) const;
 //  virtual void addClangTargetOptions(const llvm::opt::ArgList &DriverArgs,

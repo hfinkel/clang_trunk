@@ -300,26 +300,26 @@ createReferenceTemporary(CodeGenFunction &CGF,
                          const MaterializeTemporaryExpr *M, const Expr *Inner) {
   switch (M->getStorageDuration()) {
   case SD_FullExpression:
-  case SD_Automatic:
+  case SD_Automatic: {
     // If we have a constant temporary array or record try to promote it into a
     // constant global under the same rules a normal constant would've been
     // promoted. This is easier on the optimizer and generally emits fewer
     // instructions.
+    QualType Ty = Inner->getType();
     if (CGF.CGM.getCodeGenOpts().MergeAllConstants &&
-        (M->getType()->isArrayType() || M->getType()->isRecordType()) &&
-        CGF.CGM.isTypeConstant(M->getType(), true))
-      if (llvm::Constant *Init =
-              CGF.CGM.EmitConstantExpr(Inner, M->getType(), &CGF)) {
+        (Ty->isArrayType() || Ty->isRecordType()) &&
+        CGF.CGM.isTypeConstant(Ty, true))
+      if (llvm::Constant *Init = CGF.CGM.EmitConstantExpr(Inner, Ty, &CGF)) {
         auto *GV = new llvm::GlobalVariable(
             CGF.CGM.getModule(), Init->getType(), /*isConstant=*/true,
             llvm::GlobalValue::PrivateLinkage, Init, ".ref.tmp");
         GV->setAlignment(
-            CGF.getContext().getTypeAlignInChars(M->getType()).getQuantity());
+            CGF.getContext().getTypeAlignInChars(Ty).getQuantity());
         // FIXME: Should we put the new global into a COMDAT?
         return GV;
       }
-    return CGF.CreateMemTemp(Inner->getType(), "ref.tmp");
-
+    return CGF.CreateMemTemp(Ty, "ref.tmp");
+  }
   case SD_Thread:
   case SD_Static:
     return CGF.CGM.GetAddrOfGlobalTemporary(M, Inner);
@@ -1918,6 +1918,11 @@ LValue CodeGenFunction::EmitDeclRefLValue(const DeclRefExpr *E) {
   if (const auto *VD = dyn_cast<VarDecl>(ND)) {
     // CodeGen for threadprivate variables.
     if (getLangOpts().OpenMP) {
+      if (CGM.getOpenMPRuntime().isTargetCapturedGlobal(VD)){
+        llvm::Value *Val = CapturedStmtInfo->getCachedVar(VD);
+        assert( Val && "Captured global not in the captured cache??");
+        return MakeAddrLValue(Val, T, Alignment);
+      }
       if (llvm::Value *Val =
               CGM.getOpenMPRuntime().CreateOpenMPThreadPrivateCached(
                   VD, E->getExprLoc(), *this))
@@ -2122,7 +2127,12 @@ LValue CodeGenFunction::EmitPredefinedLValue(const PredefinedExpr *E) {
   StringRef NameItems[] = {
       PredefinedExpr::getIdentTypeName(E->getIdentType()), FnName};
   std::string GVName = llvm::join(NameItems, NameItems + 2, ".");
-  if (CurCodeDecl && isa<BlockDecl>(CurCodeDecl)) {
+
+  // If this is outside of a function use the top level decl.
+  const Decl *CurDecl =
+    OpenMPRoot ? OpenMPRoot->CurCodeDecl : CurCodeDecl;
+
+  if (CurDecl && isa<BlockDecl>(CurDecl)) {
     auto C = CGM.GetAddrOfConstantCString(FnName, GVName.c_str(), 1);
     return MakeAddrLValue(C, E->getType());
   }
