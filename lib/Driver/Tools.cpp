@@ -1999,8 +1999,17 @@ getAArch64ArchFeaturesFromMarch(const Driver &D, StringRef March,
                                 const ArgList &Args,
                                 std::vector<const char *> &Features) {
   std::pair<StringRef, StringRef> Split = March.split("+");
-  if (Split.first != "armv8-a")
+
+  if (Split.first == "armv8-a" ||
+      Split.first == "armv8a") {
+    // ok, no additional features.
+  } else if (
+      Split.first == "armv8.1-a" ||
+      Split.first == "armv8.1a" ) {
+    Features.push_back("+v8.1a");
+  } else {
     return false;
+  }
 
   if (Split.second.size() && !DecodeAArch64Features(D, Split.second, Features))
     return false;
@@ -2909,10 +2918,8 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
     // loading the bitcode up in 'opt' or 'llc' and running passes gives the
     // same result as running passes here.  For LTO, we don't need to preserve
     // the use-list order, since serialization to bitcode is part of the flow.
-    if (JA.getType() == types::TY_LLVM_BC) {
-      CmdArgs.push_back("-mllvm");
-      CmdArgs.push_back("-preserve-bc-uselistorder");
-    }
+    if (JA.getType() == types::TY_LLVM_BC)
+      CmdArgs.push_back("-emit-llvm-uselists");
   }
 
   // We normally speed up the clang process a bit by skipping destructors at

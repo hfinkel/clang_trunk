@@ -1478,31 +1478,6 @@ void CodeGenModule::EmitGlobal(GlobalDecl GD) {
                               /*DontDefer=*/false);
       return;
     }
-
-    if (llvm::GlobalValue *GV = GetGlobalValue(getMangledName(GD)))
-      if (!GV->isDeclaration()) {
-        // This can happen for OpenMP simd functions; ignore it in that case...
-        bool IgnoreDup = false;
-        if (const CXXMethodDecl *MD = dyn_cast_or_null<CXXMethodDecl>(GD.getDecl())) {
-          const CXXRecordDecl *Parent = MD->getParent();
-          for (DeclContext::decl_iterator DI = Parent->decls_begin(),
-                                          DE = Parent->decls_end();
-                                          DI != DE; ++DI) {
-            if (dyn_cast_or_null<OMPDeclareSimdDecl>(*DI)) {
-              IgnoreDup = true;
-              break;
-            }
-          }
-        }
-
-        if (!IgnoreDup) {
-          getDiags().Report(FD->getLocation(), diag::err_duplicate_mangled_name);
-          GlobalDecl OldGD = Manglings.lookup(GV->getName());
-          if (auto *Prev = OldGD.getDecl())
-            getDiags().Report(Prev->getLocation(), diag::note_previous_definition);
-          return;
-        }
-      }
   } else {
     const auto *VD = cast<VarDecl>(Global);
     assert(VD->isFileVarDecl() && "Cannot emit local var decl as global.");
@@ -2320,7 +2295,8 @@ void CodeGenModule::EmitGlobalVarDefinition(const VarDecl *D) {
 }
 
 static bool isVarDeclStrongDefinition(const ASTContext &Context,
-                                      const VarDecl *D, bool NoCommon) {
+                                      CodeGenModule &CGM, const VarDecl *D,
+                                      bool NoCommon) {
   // Don't give variables common linkage if -fno-common was specified unless it
   // was overridden by a NoCommon attribute.
   if ((NoCommon || D->hasAttr<NoCommonAttr>()) && !D->hasAttr<CommonAttr>())
@@ -2343,6 +2319,10 @@ static bool isVarDeclStrongDefinition(const ASTContext &Context,
 
   // Tentative definitions marked with WeakImportAttr are true definitions.
   if (D->hasAttr<WeakImportAttr>())
+    return true;
+
+  // A variable cannot be both common and exist in a comdat.
+  if (shouldBeInCOMDAT(CGM, *D))
     return true;
 
   // Declarations with a required alignment do not have common linakge in MSVC
@@ -2413,7 +2393,7 @@ llvm::GlobalValue::LinkageTypes CodeGenModule::getLLVMLinkageForDeclarator(
   // C++ doesn't have tentative definitions and thus cannot have common
   // linkage.
   if (!getLangOpts().CPlusPlus && isa<VarDecl>(D) &&
-      !isVarDeclStrongDefinition(Context, cast<VarDecl>(D),
+      !isVarDeclStrongDefinition(Context, *this, cast<VarDecl>(D),
                                  CodeGenOpts.NoCommon))
     return llvm::GlobalVariable::CommonLinkage;
 
@@ -2611,6 +2591,14 @@ void CodeGenModule::EmitGlobalFunctionDefinition(GlobalDecl GD,
     } else {
       GV = cast<llvm::GlobalValue>(C);
     }
+  }
+
+  if (!GV->isDeclaration()) {
+    getDiags().Report(D->getLocation(), diag::err_duplicate_mangled_name);
+    GlobalDecl OldGD = Manglings.lookup(GV->getName());
+    if (auto *Prev = OldGD.getDecl())
+      getDiags().Report(Prev->getLocation(), diag::note_previous_definition);
+    return;
   }
 
   if (GV->getType()->getElementType() != Ty) {
@@ -3647,7 +3635,7 @@ void CodeGenModule::ClearUnusedCoverageMapping(const Decl *D) {
 
 void CodeGenModule::EmitDeferredUnusedCoverageMappings() {
   std::vector<const Decl *> DeferredDecls;
-  for (const auto I : DeferredEmptyCoverageMappingDecls) {
+  for (const auto &I : DeferredEmptyCoverageMappingDecls) {
     if (!I.second)
       continue;
     DeferredDecls.push_back(I.first);
