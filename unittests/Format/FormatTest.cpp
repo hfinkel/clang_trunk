@@ -1900,6 +1900,10 @@ TEST_F(FormatTest, UnderstandsAccessSpecifiers) {
                "signals:\n"
                "  void g();\n"
                "};");
+
+  // Don't interpret 'signals' the wrong way.
+  verifyFormat("signals.set();");
+  verifyFormat("for (Signals signals : f()) {\n}");
 }
 
 TEST_F(FormatTest, SeparatesLogicalBlocks) {
@@ -2497,6 +2501,14 @@ TEST_F(FormatTest, FormatsSmallMacroDefinitionsInSingleLine) {
 TEST_F(FormatTest, DoesNotBreakPureVirtualFunctionDefinition) {
   verifyFormat("virtual void write(ELFWriter *writerrr,\n"
                "                   OwningPtr<FileOutputBuffer> &buffer) = 0;");
+
+  // Do break defaulted and deleted functions.
+  verifyFormat("virtual void ~Deeeeeeeestructor() =\n"
+               "    default;",
+               getLLVMStyleWithColumns(40));
+  verifyFormat("virtual void ~Deeeeeeeestructor() =\n"
+               "    delete;",
+               getLLVMStyleWithColumns(40));
 }
 
 TEST_F(FormatTest, BreaksStringLiteralsOnlyInDefine) {
@@ -4142,6 +4154,18 @@ TEST_F(FormatTest, FormatsBuilderPattern) {
                "    ->aaaaaaaaaaaaaae(0)\n"
                "    ->aaaaaaaaaaaaaaa();");
 
+  // Don't linewrap after very short segments.
+  verifyFormat("a().aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa()\n"
+               "    .aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa()\n"
+               "    .aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa();");
+  verifyFormat("aa().aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa()\n"
+               "    .aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa()\n"
+               "    .aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa();");
+  verifyFormat("aaa()\n"
+               "    .aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa()\n"
+               "    .aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa()\n"
+               "    .aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa();");
+
   verifyFormat("aaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaa()\n"
                "    .aaaaaaaaaaaaaaaaaaaaaaaaaa()\n"
                "    .has<bbbbbbbbbbbbbbbbbbbbb>();");
@@ -5422,8 +5446,8 @@ TEST_F(FormatTest, UnderstandsUsesOfStarAndAmp) {
   verifyIndependentOfContext("A = new SomeType *[Length]();");
   verifyIndependentOfContext("T **t = new T *;");
   verifyIndependentOfContext("T **t = new T *();");
-  verifyGoogleFormat("A = new SomeType* [Length]();");
-  verifyGoogleFormat("A = new SomeType* [Length];");
+  verifyGoogleFormat("A = new SomeType*[Length]();");
+  verifyGoogleFormat("A = new SomeType*[Length];");
   verifyGoogleFormat("T** t = new T*;");
   verifyGoogleFormat("T** t = new T*();");
 
@@ -5491,8 +5515,8 @@ TEST_F(FormatTest, UnderstandsUsesOfStarAndAmp) {
   verifyFormat("A<int **> a;", PointerMiddle);
   verifyFormat("A<int *, int *> a;", PointerMiddle);
   verifyFormat("A<int * []> a;", PointerMiddle);
-  verifyFormat("A = new SomeType * [Length]();", PointerMiddle);
-  verifyFormat("A = new SomeType * [Length];", PointerMiddle);
+  verifyFormat("A = new SomeType *[Length]();", PointerMiddle);
+  verifyFormat("A = new SomeType *[Length];", PointerMiddle);
   verifyFormat("T ** t = new T *;", PointerMiddle);
 }
 
@@ -5690,6 +5714,8 @@ TEST_F(FormatTest, BreaksLongVariableDeclarations) {
                "    LoooooooooooooooooooooooooooooooooooooooongVariable(a);");
   verifyFormat("LoooooooooooooooooooooooooooooooooooooooongType\n"
                "    LoooooooooooooooooooooooooooooooooooooooongVariable({});");
+  verifyFormat("LoooooooooooooooooooooooooooooooooooooooongType\n"
+               "    LoooooooooooooooooooooooooooooooooooooongVariable([A a]);");
 }
 
 TEST_F(FormatTest, BreaksLongDeclarations) {
