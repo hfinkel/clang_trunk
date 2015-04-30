@@ -34,12 +34,11 @@
 using namespace clang;
 
 MacroDirective *
-Preprocessor::getMacroDirectiveHistory(const IdentifierInfo *II) const {
-  assert(II->hadMacroDefinition() && "Identifier has not been not a macro!");
-
+Preprocessor::getLocalMacroDirectiveHistory(const IdentifierInfo *II) const {
+  if (!II->hadMacroDefinition())
+    return nullptr;
   auto Pos = Macros.find(II);
-  assert(Pos != Macros.end() && "Identifier macro info is missing!");
-  return Pos->second.getLatest();
+  return Pos == Macros.end() ? nullptr : Pos->second.getLatest();
 }
 
 void Preprocessor::appendMacroDirective(IdentifierInfo *II, MacroDirective *MD){
@@ -50,50 +49,14 @@ void Preprocessor::appendMacroDirective(IdentifierInfo *II, MacroDirective *MD){
   auto *OldMD = StoredMD.getLatest();
   MD->setPrevious(OldMD);
   StoredMD.setLatest(MD);
+  StoredMD.overrideActiveModuleMacros(*this, II);
 
   // Set up the identifier as having associated macro history.
   II->setHasMacroDefinition(true);
-  if (!MD->isDefined())
+  if (!MD->isDefined() && LeafModuleMacros.find(II) == LeafModuleMacros.end())
     II->setHasMacroDefinition(false);
-  if (II->isFromAST() && !MD->isImported())
+  if (II->isFromAST())
     II->setChangedSinceDeserialization();
-
-  // Accumulate any overridden imported macros.
-  if (!MD->isImported() && getCurrentModule()) {
-    Module *OwningMod = getModuleContainingLocation(MD->getLocation());
-    if (!OwningMod)
-      return;
-
-    for (auto *PrevMD = OldMD; PrevMD; PrevMD = PrevMD->getPrevious()) {
-      Module *DirectiveMod = getModuleContainingLocation(PrevMD->getLocation());
-      if (ModuleMacro *PrevMM = PrevMD->getOwningModuleMacro())
-        StoredMD.addOverriddenMacro(*this, PrevMM);
-      else if (ModuleMacro *PrevMM = getModuleMacro(DirectiveMod, II))
-        // The previous macro was from another submodule that we #included.
-        // FIXME: Create an import directive when importing a macro from a local
-        // submodule.
-        StoredMD.addOverriddenMacro(*this, PrevMM);
-      else
-        // We're still within the module defining the previous macro. We don't
-        // override it.
-        break;
-
-      // Stop once we leave the original macro's submodule.
-      //
-      // Either this submodule #included another submodule of the same
-      // module or it just happened to be built after the other module.
-      // In the former case, we override the submodule's macro.
-      //
-      // FIXME: In the latter case, we shouldn't do so, but we can't tell
-      // these cases apart.
-      //
-      // FIXME: We can leave this submodule and re-enter it if it #includes a
-      // header within a different submodule of the same module. In such cases
-      // the overrides list will be incomplete.
-      if (DirectiveMod != OwningMod || !PrevMD->isImported())
-        break;
-    }
-  }
 }
 
 void Preprocessor::setLoadedMacroDirective(IdentifierInfo *II,
@@ -105,7 +68,7 @@ void Preprocessor::setLoadedMacroDirective(IdentifierInfo *II,
   StoredMD = MD;
   // Setup the identifier as having associated macro history.
   II->setHasMacroDefinition(true);
-  if (!MD->isDefined())
+  if (!MD->isDefined() && LeafModuleMacros.find(II) == LeafModuleMacros.end())
     II->setHasMacroDefinition(false);
 }
 
@@ -144,6 +107,8 @@ ModuleMacro *Preprocessor::addModuleMacro(Module *Mod, IdentifierInfo *II,
 
   // The new macro is always a leaf macro.
   LeafMacros.push_back(MM);
+  // The identifier now has defined macros (that may or may not be visible).
+  II->setHasMacroDefinition(true);
 
   New = true;
   return MM;
@@ -155,6 +120,78 @@ ModuleMacro *Preprocessor::getModuleMacro(Module *Mod, IdentifierInfo *II) {
 
   void *InsertPos;
   return ModuleMacros.FindNodeOrInsertPos(ID, InsertPos);
+}
+
+void Preprocessor::updateModuleMacroInfo(const IdentifierInfo *II,
+                                         ModuleMacroInfo &Info) {
+  assert(Info.ActiveModuleMacrosGeneration != MacroVisibilityGeneration &&
+         "don't need to update this macro name info");
+  Info.ActiveModuleMacrosGeneration = MacroVisibilityGeneration;
+
+  auto Leaf = LeafModuleMacros.find(II);
+  if (Leaf == LeafModuleMacros.end()) {
+    // No imported macros at all: nothing to do.
+    return;
+  }
+
+  Info.ActiveModuleMacros.clear();
+
+  // Every macro that's locally overridden is overridden by a visible macro.
+  llvm::DenseMap<ModuleMacro *, int> NumHiddenOverrides;
+  for (auto *O : Info.OverriddenMacros)
+    NumHiddenOverrides[O] = -1;
+
+  // Collect all macros that are not overridden by a visible macro.
+  llvm::SmallVector<ModuleMacro *, 16> Worklist(Leaf->second.begin(),
+                                                Leaf->second.end());
+  while (!Worklist.empty()) {
+    auto *MM = Worklist.pop_back_val();
+    if (MM->getOwningModule()->NameVisibility >= Module::MacrosVisible) {
+      // We only care about collecting definitions; undefinitions only act
+      // to override other definitions.
+      if (MM->getMacroInfo())
+        Info.ActiveModuleMacros.push_back(MM);
+    } else {
+      for (auto *O : MM->overrides())
+        if ((unsigned)++NumHiddenOverrides[O] == O->getNumOverridingMacros())
+          Worklist.push_back(O);
+    }
+  }
+  // Our reverse postorder walk found the macros in reverse order.
+  std::reverse(Info.ActiveModuleMacros.begin(), Info.ActiveModuleMacros.end());
+
+  // Determine whether the macro name is ambiguous.
+  MacroInfo *MI = nullptr;
+  bool IsSystemMacro = true;
+  bool IsAmbiguous = false;
+  if (auto *MD = Info.MD) {
+    while (MD && isa<VisibilityMacroDirective>(MD))
+      MD = MD->getPrevious();
+    if (auto *DMD = dyn_cast_or_null<DefMacroDirective>(MD)) {
+      MI = DMD->getInfo();
+      IsSystemMacro &= SourceMgr.isInSystemHeader(DMD->getLocation());
+    }
+  }
+  for (auto *Active : Info.ActiveModuleMacros) {
+    auto *NewMI = Active->getMacroInfo();
+
+    // Before marking the macro as ambiguous, check if this is a case where
+    // both macros are in system headers. If so, we trust that the system
+    // did not get it wrong. This also handles cases where Clang's own
+    // headers have a different spelling of certain system macros:
+    //   #define LONG_MAX __LONG_MAX__ (clang's limits.h)
+    //   #define LONG_MAX 0x7fffffffffffffffL (system's limits.h)
+    //
+    // FIXME: Remove the defined-in-system-headers check. clang's limits.h
+    // overrides the system limits.h's macros, so there's no conflict here.
+    if (MI && NewMI != MI &&
+        !MI->isIdenticalTo(*NewMI, *this, /*Syntactically=*/true))
+      IsAmbiguous = true;
+    IsSystemMacro &= Active->getOwningModule()->IsSystem ||
+                     SourceMgr.isInSystemHeader(NewMI->getDefinitionLoc());
+    MI = NewMI;
+  }
+  Info.IsAmbiguous = IsAmbiguous && !IsSystemMacro;
 }
 
 /// RegisterBuiltinMacro - Register the specified identifier in the identifier
@@ -241,10 +278,11 @@ static bool isTrivialSingleTokenExpansion(const MacroInfo *MI,
 
   // If the identifier is a macro, and if that macro is enabled, it may be
   // expanded so it's not a trivial expansion.
-  if (II->hasMacroDefinition() && PP.getMacroInfo(II)->isEnabled() &&
-      // Fast expanding "#define X X" is ok, because X would be disabled.
-      II != MacroIdent)
-    return false;
+  if (auto *ExpansionMI = PP.getMacroInfo(II))
+    if (ExpansionMI->isEnabled() &&
+        // Fast expanding "#define X X" is ok, because X would be disabled.
+        II != MacroIdent)
+      return false;
 
   // If this is an object-like macro invocation, it is safe to trivially expand
   // it.
@@ -307,10 +345,8 @@ bool Preprocessor::isNextPPTokenLParen() {
 /// HandleMacroExpandedIdentifier - If an identifier token is read that is to be
 /// expanded as a macro, handle it and return the next token as 'Identifier'.
 bool Preprocessor::HandleMacroExpandedIdentifier(Token &Identifier,
-                                                 MacroDirective *MD) {
-  MacroDirective::DefInfo Def = MD->getDefinition();
-  assert(Def.isValid());
-  MacroInfo *MI = Def.getMacroInfo();
+                                                 const MacroDefinition &M) {
+  MacroInfo *MI = M.getMacroInfo();
 
   // If this is a macro expansion in the "#if !defined(x)" line for the file,
   // then the macro could expand to different things in other contexts, we need
@@ -319,7 +355,8 @@ bool Preprocessor::HandleMacroExpandedIdentifier(Token &Identifier,
 
   // If this is a builtin macro, like __LINE__ or _Pragma, handle it specially.
   if (MI->isBuiltinMacro()) {
-    if (Callbacks) Callbacks->MacroExpands(Identifier, MD,
+    // FIXME: Tell callbacks about module macros.
+    if (Callbacks) Callbacks->MacroExpands(Identifier, M.getLocalDirective(),
                                            Identifier.getLocation(),
                                            /*Args=*/nullptr);
     ExpandBuiltinMacro(Identifier);
@@ -367,10 +404,13 @@ bool Preprocessor::HandleMacroExpandedIdentifier(Token &Identifier,
       // reading the function macro arguments. To ensure, in that case, that
       // MacroExpands callbacks still happen in source order, queue this
       // callback to have it happen after the function macro callback.
+      // FIXME: Tell callbacks about module macros.
       DelayedMacroExpandsCallbacks.push_back(
-                              MacroExpandsInfo(Identifier, MD, ExpansionRange));
+          MacroExpandsInfo(Identifier, M.getLocalDirective(), ExpansionRange));
     } else {
-      Callbacks->MacroExpands(Identifier, MD, ExpansionRange, Args);
+      // FIXME: Tell callbacks about module macros.
+      Callbacks->MacroExpands(Identifier, M.getLocalDirective(), ExpansionRange,
+                              Args);
       if (!DelayedMacroExpandsCallbacks.empty()) {
         for (unsigned i=0, e = DelayedMacroExpandsCallbacks.size(); i!=e; ++i) {
           MacroExpandsInfo &Info = DelayedMacroExpandsCallbacks[i];
@@ -384,20 +424,16 @@ bool Preprocessor::HandleMacroExpandedIdentifier(Token &Identifier,
   }
 
   // If the macro definition is ambiguous, complain.
-  if (Def.getDirective()->isAmbiguous()) {
+  if (M.isAmbiguous()) {
     Diag(Identifier, diag::warn_pp_ambiguous_macro)
       << Identifier.getIdentifierInfo();
     Diag(MI->getDefinitionLoc(), diag::note_pp_ambiguous_macro_chosen)
       << Identifier.getIdentifierInfo();
-    for (MacroDirective::DefInfo PrevDef = Def.getPreviousDefinition();
-         PrevDef && !PrevDef.isUndefined();
-         PrevDef = PrevDef.getPreviousDefinition()) {
-      Diag(PrevDef.getMacroInfo()->getDefinitionLoc(),
-           diag::note_pp_ambiguous_macro_other)
-        << Identifier.getIdentifierInfo();
-      if (!PrevDef.getDirective()->isAmbiguous())
-        break;
-    }
+    M.forAllDefinitions([&](const MacroInfo *OtherMI) {
+      if (OtherMI != MI)
+        Diag(OtherMI->getDefinitionLoc(), diag::note_pp_ambiguous_macro_other)
+          << Identifier.getIdentifierInfo();
+    });
   }
 
   // If we started lexing a macro, enter the macro expansion body.
