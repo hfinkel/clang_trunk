@@ -186,10 +186,7 @@ public:
   /// particular module.
   enum NameVisibilityKind {
     /// \brief All of the names in this module are hidden.
-    ///
     Hidden,
-    /// \brief Only the macro names in this module are visible.
-    MacrosVisible,
     /// \brief All of the names in this module are visible.
     AllVisible
   };
@@ -197,15 +194,12 @@ public:
   /// \brief The visibility of names within this particular module.
   NameVisibilityKind NameVisibility;
 
-  /// \brief The location at which macros within this module became visible.
-  SourceLocation MacroVisibilityLoc;
-
   /// \brief The location of the inferred submodule.
   SourceLocation InferredSubmoduleLoc;
 
   /// \brief The set of modules imported by this module, and on which this
   /// module depends.
-  SmallVector<Module *, 2> Imports;
+  llvm::SmallSetVector<Module *, 2> Imports;
   
   /// \brief Describes an exported module.
   ///
@@ -480,14 +474,24 @@ private:
 class VisibleModuleSet {
 public:
   VisibleModuleSet() : Generation(0) {}
+  VisibleModuleSet(VisibleModuleSet &&O)
+      : ImportLocs(std::move(O.ImportLocs)), Generation(O.Generation ? 1 : 0) {
+    O.ImportLocs.clear();
+    ++O.Generation;
+  }
 
+  /// Move from another visible modules set. Guaranteed to leave the source
+  /// empty and bump the generation on both.
   VisibleModuleSet &operator=(VisibleModuleSet &&O) {
     ImportLocs = std::move(O.ImportLocs);
+    O.ImportLocs.clear();
+    ++O.Generation;
     ++Generation;
     return *this;
   }
 
-  /// \brief Get the current visibility generation.
+  /// \brief Get the current visibility generation. Incremented each time the
+  /// set of visible modules changes in any way.
   unsigned getGeneration() const { return Generation; }
 
   /// \brief Determine whether a module is visible.

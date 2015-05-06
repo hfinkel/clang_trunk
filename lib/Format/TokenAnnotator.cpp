@@ -43,8 +43,9 @@ private:
   bool parseAngle() {
     if (!CurrentToken)
       return false;
-    ScopedContextCreator ContextCreator(*this, tok::less, 10);
     FormatToken *Left = CurrentToken->Previous;
+    Left->ParentBracket = Contexts.back().ContextKind;
+    ScopedContextCreator ContextCreator(*this, tok::less, 10);
     Contexts.back().IsExpression = false;
     // If there's a template keyword before the opening angle bracket, this is a
     // template parameter, not an argument.
@@ -92,6 +93,8 @@ private:
   bool parseParens(bool LookForDecls = false) {
     if (!CurrentToken)
       return false;
+    FormatToken *Left = CurrentToken->Previous;
+    Left->ParentBracket = Contexts.back().ContextKind;
     ScopedContextCreator ContextCreator(*this, tok::l_paren, 1);
 
     // FIXME: This is a bit of a hack. Do better.
@@ -99,7 +102,6 @@ private:
         Contexts.size() == 2 && Contexts[0].ColonIsForRangeExpr;
 
     bool StartsObjCMethodExpr = false;
-    FormatToken *Left = CurrentToken->Previous;
     if (CurrentToken->is(tok::caret)) {
       // (^ can start a block type.
       Left->Type = TT_ObjCBlockLParen;
@@ -132,7 +134,7 @@ private:
       Contexts.back().IsExpression = false;
     } else if (Left->Previous && Left->Previous->is(tok::kw___attribute)) {
       Left->Type = TT_AttributeParen;
-    } else if (Left->Previous && Left->Previous->IsForEachMacro) {
+    } else if (Left->Previous && Left->Previous->is(TT_ForEachMacro)) {
       // The first argument to a foreach macro is a declaration.
       Contexts.back().IsForEachMacro = true;
       Contexts.back().IsExpression = false;
@@ -245,6 +247,7 @@ private:
     // ')' or ']'), it could be the start of an Objective-C method
     // expression, or it could the the start of an Objective-C array literal.
     FormatToken *Left = CurrentToken->Previous;
+    Left->ParentBracket = Contexts.back().ContextKind;
     FormatToken *Parent = Left->getPreviousNonComment();
     bool StartsObjCMethodExpr =
         Contexts.back().CanBeExpression && Left->isNot(TT_LambdaLSquare) &&
@@ -324,6 +327,7 @@ private:
   bool parseBrace() {
     if (CurrentToken) {
       FormatToken *Left = CurrentToken->Previous;
+      Left->ParentBracket = Contexts.back().ContextKind;
 
       if (Contexts.back().CaretFound)
         Left->Type = TT_ObjCBlockLBrace;
@@ -418,11 +422,12 @@ private:
         return false;
       // Colons from ?: are handled in parseConditional().
       if (Style.Language == FormatStyle::LK_JavaScript) {
-        if (Contexts.back().ColonIsForRangeExpr ||
-            (Contexts.size() == 1 &&
+        if (Contexts.back().ColonIsForRangeExpr || // colon in for loop
+            (Contexts.size() == 1 &&               // switch/case labels
              !Line.First->isOneOf(tok::kw_enum, tok::kw_case)) ||
-            Contexts.back().ContextKind == tok::l_paren ||
-            Contexts.back().ContextKind == tok::l_square) {
+            Contexts.back().ContextKind == tok::l_paren ||  // function params
+            Contexts.back().ContextKind == tok::l_square || // array type
+            Line.MustBeDeclaration) { // method/property declaration
           Tok->Type = TT_JsTypeColon;
           break;
         }
@@ -529,14 +534,20 @@ private:
       break;
     case tok::question:
       if (Style.Language == FormatStyle::LK_JavaScript && Tok->Next &&
-          Tok->Next->isOneOf(tok::colon, tok::semi, tok::r_paren,
+          Tok->Next->isOneOf(tok::semi, tok::colon, tok::r_paren,
                              tok::r_brace)) {
-        // Question marks before semicolons, colons, commas, etc. indicate
-        // optional types (fields, parameters), e.g.
-        // `function(x?: string, y?) {...}` or `class X {y?;}`
+        // Question marks before semicolons, colons, etc. indicate optional
+        // types (fields, parameters), e.g.
+        //   function(x?: string, y?) {...}
+        //   class X { y?; }
         Tok->Type = TT_JsTypeOptionalQuestion;
         break;
       }
+      // Declarations cannot be conditional expressions, this can only be part
+      // of a type declaration.
+      if (Line.MustBeDeclaration &&
+          Style.Language == FormatStyle::LK_JavaScript)
+        break;
       parseConditional();
       break;
     case tok::kw_template:
@@ -714,9 +725,9 @@ private:
 
     // Reset token type in case we have already looked at it and then
     // recovered from an error (e.g. failure to find the matching >).
-    if (!CurrentToken->isOneOf(TT_LambdaLSquare, TT_FunctionLBrace,
-                               TT_ImplicitStringLiteral, TT_RegexLiteral,
-                               TT_TrailingReturnArrow))
+    if (!CurrentToken->isOneOf(TT_LambdaLSquare, TT_ForEachMacro,
+                               TT_FunctionLBrace, TT_ImplicitStringLiteral,
+                               TT_RegexLiteral, TT_TrailingReturnArrow))
       CurrentToken->Type = TT_Unknown;
     CurrentToken->Role.reset();
     CurrentToken->MatchingParen = nullptr;
@@ -868,7 +879,14 @@ private:
     } else if (Current.isOneOf(tok::exclaim, tok::tilde)) {
       Current.Type = TT_UnaryOperator;
     } else if (Current.is(tok::question)) {
-      Current.Type = TT_ConditionalExpr;
+      if (Style.Language == FormatStyle::LK_JavaScript &&
+          Line.MustBeDeclaration) {
+        // In JavaScript, `interface X { foo?(): bar; }` is an optional method
+        // on the interface, not a ternary expression.
+        Current.Type = TT_JsTypeOptionalQuestion;
+      } else {
+        Current.Type = TT_ConditionalExpr;
+      }
     } else if (Current.isBinaryOperator() &&
                (!Current.Previous || Current.Previous->isNot(tok::l_square))) {
       Current.Type = TT_BinaryOperator;
@@ -1750,11 +1768,10 @@ bool TokenAnnotator::spaceRequiredBetween(const AnnotatedLine &Line,
     return Line.Type == LT_ObjCDecl || Left.is(tok::semi) ||
            (Style.SpaceBeforeParens != FormatStyle::SBPO_Never &&
             (Left.isOneOf(tok::kw_if, tok::kw_for, tok::kw_while,
-                          tok::kw_switch, tok::kw_case) ||
+                          tok::kw_switch, tok::kw_case, TT_ForEachMacro) ||
              (Left.isOneOf(tok::kw_try, Keywords.kw___except, tok::kw_catch,
                            tok::kw_new, tok::kw_delete) &&
-              (!Left.Previous || Left.Previous->isNot(tok::period))) ||
-             Left.IsForEachMacro)) ||
+              (!Left.Previous || Left.Previous->isNot(tok::period))))) ||
            (Style.SpaceBeforeParens == FormatStyle::SBPO_Always &&
             (Left.is(tok::identifier) || Left.isFunctionLikeKeyword()) &&
             Line.Type != LT_PreprocessorDirective);
@@ -1804,7 +1821,7 @@ bool TokenAnnotator::spaceRequiredBefore(const AnnotatedLine &Line,
         Line.First->isOneOf(Keywords.kw_import, tok::kw_export))
       return false;
     if (Left.is(TT_TemplateCloser) &&
-        !Right.isOneOf(tok::l_brace, tok::comma, tok::l_square,
+        !Right.isOneOf(tok::equal, tok::l_brace, tok::comma, tok::l_square,
                        Keywords.kw_implements, Keywords.kw_extends))
       // Type assertions ('<type>expr') are not followed by whitespace. Other
       // locations that should have whitespace following are identified by the
@@ -1851,12 +1868,20 @@ bool TokenAnnotator::spaceRequiredBefore(const AnnotatedLine &Line,
     return Right.is(tok::coloncolon);
   if (Right.is(TT_OverloadedOperatorLParen))
     return false;
-  if (Right.is(tok::colon))
-    return !Line.First->isOneOf(tok::kw_case, tok::kw_default) &&
-           Right.getNextNonComment() && Right.isNot(TT_ObjCMethodExpr) &&
-           !Left.is(tok::question) &&
-           !(Right.is(TT_InlineASMColon) && Left.is(tok::coloncolon)) &&
-           (Right.isNot(TT_DictLiteral) || Style.SpacesInContainerLiterals);
+  if (Right.is(tok::colon)) {
+    if (Line.First->isOneOf(tok::kw_case, tok::kw_default) ||
+        !Right.getNextNonComment())
+      return false;
+    if (Right.is(TT_ObjCMethodExpr))
+      return false;
+    if (Left.is(tok::question))
+      return false;
+    if (Right.is(TT_InlineASMColon) && Left.is(tok::coloncolon))
+      return false;
+    if (Right.is(TT_DictLiteral))
+      return Style.SpacesInContainerLiterals;
+    return true;
+  }
   if (Left.is(TT_UnaryOperator))
     return Right.is(TT_BinaryOperator);
   if (Left.is(TT_CastRParen))
