@@ -1056,6 +1056,8 @@ TEST_F(FormatTest, UnderstandsSingleLineComments) {
 
   verifyNoCrash("/\\\n/");
   verifyNoCrash("/\\\n* */");
+  // The 0-character somehow makes the lexer return a proper comment.
+  verifyNoCrash(StringRef("/*\\\0\n/", 6));
 }
 
 TEST_F(FormatTest, KeepsParameterWithTrailingCommentsOnTheirOwnLine) {
@@ -1619,6 +1621,17 @@ TEST_F(FormatTest, SplitsLongLinesInComments) {
                    "   * another comment we have to break\n"
                    "* a left comment\n"
                    "   */",
+                   getLLVMStyleWithColumns(20)));
+
+  EXPECT_EQ("/**\n"
+            " * multiline block\n"
+            " * comment\n"
+            " *\n"
+            " */",
+            format("/**\n"
+                   " * multiline block comment\n"
+                   " *\n"
+                   " */",
                    getLLVMStyleWithColumns(20)));
 
   EXPECT_EQ("/*\n"
@@ -2938,15 +2951,13 @@ TEST_F(FormatTest, FormatUnbalancedStructuralElements) {
             format("#define A } }\nint i;", getLLVMStyleWithColumns(11)));
 }
 
-TEST_F(FormatTest, EscapedNewlineAtStartOfToken) {
+TEST_F(FormatTest, EscapedNewlines) {
   EXPECT_EQ(
       "#define A \\\n  int i;  \\\n  int j;",
       format("#define A \\\nint i;\\\n  int j;", getLLVMStyleWithColumns(11)));
   EXPECT_EQ("template <class T> f();", format("\\\ntemplate <class T> f();"));
-}
-
-TEST_F(FormatTest, NoEscapedNewlineHandlingInBlockComments) {
   EXPECT_EQ("/* \\  \\  \\\n*/", format("\\\n/* \\  \\  \\\n*/"));
+  EXPECT_EQ("<a\n\\\\\n>", format("<a\n\\\\\n>"));
 }
 
 TEST_F(FormatTest, DontCrashOnBlockComments) {
@@ -5144,6 +5155,7 @@ TEST_F(FormatTest, UnderstandsTemplateParameters) {
                getLLVMStyleWithColumns(60));
   verifyFormat("static_assert(is_convertible<A &&, B>::value, \"AAA\");");
   verifyFormat("Constructor(A... a) : a_(X<A>{std::forward<A>(a)}...) {}");
+  verifyFormat("< < < < < < < < < < < < < < < < < < < < < < < < < < < < < <");
 }
 
 TEST_F(FormatTest, UnderstandsBinaryOperators) {
@@ -6384,6 +6396,8 @@ TEST_F(FormatTest, UnderstandContextOfRecordTypeKeywords) {
   verifyFormat("class __declspec(X) Z {\n} n;");
   verifyFormat("class A##B##C {\n} n;");
   verifyFormat("class alignas(16) Z {\n} n;");
+  verifyFormat("class MACRO(X) alignas(16) Z {\n} n;");
+  verifyFormat("class MACROA MACRO(X) Z {\n} n;");
 
   // Redefinition from nested context:
   verifyFormat("class A::B::C {\n} n;");
@@ -6525,7 +6539,7 @@ TEST_F(FormatTest, BlockComments) {
   EXPECT_EQ("/*\n"
             "*\n"
             " * aaaaaa\n"
-            "*aaaaaa\n"
+            " * aaaaaa\n"
             "*/",
             format("/*\n"
                    "*\n"
@@ -7132,6 +7146,8 @@ TEST_F(FormatTest, FormatObjCMethodExpr) {
                "             fraction:1.0\n"
                "       respectFlipped:NO\n"
                "                hints:nil];");
+  verifyFormat("[aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+               "    aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa];");
 
   verifyFormat(
       "scoped_nsobject<NSTextField> message(\n"
@@ -7147,6 +7163,13 @@ TEST_F(FormatTest, FormatObjCMethodExpr) {
       "[self aaaaaaaaaa:aaaaaaaaaaaaaaa | aaaaaaaaaaaaaaa | aaaaaaaaaaaaaaa |\n"
       "                 aaaaaaaaaaaaaaa | aaaaaaaaaaaaaaa | aaaaaaaaaaaaaaa |\n"
       "                 aaaaaaaaaaaaaaa | aaaaaaaaaaaaaaa];");
+
+  // FIXME: This violates the column limit.
+  verifyFormat(
+      "[aaaaaaaaaaaaaaaaaaaaaaaaa\n"
+      "    aaaaaaaaaaaaaaaaa:aaaaaaaa\n"
+      "                  aaa:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa];",
+      getLLVMStyleWithColumns(60));
 
   // Variadic parameters.
   verifyFormat(
