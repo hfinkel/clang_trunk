@@ -47,6 +47,11 @@ private:
     FormatToken *Left = CurrentToken->Previous;
     Left->ParentBracket = Contexts.back().ContextKind;
     ScopedContextCreator ContextCreator(*this, tok::less, 10);
+
+    // If this angle is in the context of an expression, we need to be more
+    // hesitant to detect it as opening template parameters.
+    bool InExprContext = Contexts.back().IsExpression;
+
     Contexts.back().IsExpression = false;
     // If there's a template keyword before the opening angle bracket, this is a
     // template parameter, not an argument.
@@ -70,8 +75,8 @@ private:
         next();
         continue;
       }
-      if (CurrentToken->isOneOf(tok::r_paren, tok::r_square, tok::r_brace,
-                                tok::colon, tok::question))
+      if (CurrentToken->isOneOf(tok::r_paren, tok::r_square, tok::r_brace) ||
+          (CurrentToken->isOneOf(tok::colon, tok::question) && InExprContext))
         return false;
       // If a && or || is found and interpreted as a binary operator, this set
       // of angles is likely part of something like "a < b && c > d". If the
@@ -731,7 +736,8 @@ private:
     // recovered from an error (e.g. failure to find the matching >).
     if (!CurrentToken->isOneOf(TT_LambdaLSquare, TT_ForEachMacro,
                                TT_FunctionLBrace, TT_ImplicitStringLiteral,
-                               TT_RegexLiteral, TT_TrailingReturnArrow))
+                               TT_InlineASMBrace, TT_RegexLiteral,
+                               TT_TrailingReturnArrow))
       CurrentToken->Type = TT_Unknown;
     CurrentToken->Role.reset();
     CurrentToken->MatchingParen = nullptr;
@@ -1573,7 +1579,7 @@ unsigned TokenAnnotator::splitPenalty(const AnnotatedLine &Line,
     if (Left.is(tok::comma) && Left.NestingLevel == 0)
       return 3;
   } else if (Style.Language == FormatStyle::LK_JavaScript) {
-    if (Right.is(Keywords.kw_function))
+    if (Right.is(Keywords.kw_function) && Left.isNot(tok::comma))
       return 100;
   }
 
@@ -1684,6 +1690,9 @@ unsigned TokenAnnotator::splitPenalty(const AnnotatedLine &Line,
   if (Left.is(TT_ConditionalExpr))
     return prec::Conditional;
   prec::Level Level = Left.getPrecedence();
+  if (Level != prec::Unknown)
+    return Level;
+  Level = Right.getPrecedence();
   if (Level != prec::Unknown)
     return Level;
 
@@ -1888,7 +1897,7 @@ bool TokenAnnotator::spaceRequiredBefore(const AnnotatedLine &Line,
     return false;
   if (Right.is(tok::colon)) {
     if (Line.First->isOneOf(tok::kw_case, tok::kw_default) ||
-        !Right.getNextNonComment())
+        !Right.getNextNonComment() || Right.getNextNonComment()->is(tok::semi))
       return false;
     if (Right.is(TT_ObjCMethodExpr))
       return false;
@@ -1998,6 +2007,8 @@ bool TokenAnnotator::mustBreakBefore(const AnnotatedLine &Line,
       Style.Language == FormatStyle::LK_Proto)
     // Don't put enums onto single lines in protocol buffers.
     return true;
+  if (Right.is(TT_InlineASMBrace))
+    return Right.HasUnescapedNewline;
   if (Style.Language == FormatStyle::LK_JavaScript && Right.is(tok::r_brace) &&
       Left.is(tok::l_brace) && !Left.Children.empty())
     // Support AllowShortFunctionsOnASingleLine for JavaScript.

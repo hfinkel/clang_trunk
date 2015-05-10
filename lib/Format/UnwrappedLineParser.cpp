@@ -666,9 +666,11 @@ void UnwrappedLineParser::parseStructuralElement() {
   case tok::kw_asm:
     nextToken();
     if (FormatTok->is(tok::l_brace)) {
+      FormatTok->Type = TT_InlineASMBrace;
       nextToken();
       while (FormatTok && FormatTok->isNot(tok::eof)) {
         if (FormatTok->is(tok::r_brace)) {
+          FormatTok->Type = TT_InlineASMBrace;
           nextToken();
           break;
         }
@@ -1381,6 +1383,8 @@ void UnwrappedLineParser::parseLabel() {
     }
     addUnwrappedLine();
   } else {
+    if (FormatTok->is(tok::semi))
+      nextToken();
     addUnwrappedLine();
   }
   Line->Level = OldLineLevel;
