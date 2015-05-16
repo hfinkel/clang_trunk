@@ -547,6 +547,8 @@ def vtordisp_mode_EQ : Joined<["-"], "vtordisp-mode=">,
   HelpText<"Control vtordisp placement on win32 targets">;
 def fno_rtti_data : Flag<["-"], "fno-rtti-data">,
   HelpText<"Control emission of RTTI data">;
+def fnative_half_type: Flag<["-"], "fnative-half-type">,
+  HelpText<"Use the native half type for __fp16 instead of promoting to float">;
 def fallow_half_arguments_and_returns : Flag<["-"], "fallow-half-arguments-and-returns">,
   HelpText<"Allow function arguments and returns of type half">;
 
@@ -642,6 +644,8 @@ def omp_target_mode : Flag<["-"], "omp-target-mode">,
   HelpText<"Generate code for an OpenMP target">;
 def omp_main_file_path : Separate<["-"], "omp-main-file-path">,
   HelpText<"Path to the original source file that requires OpenMP code generation">;
+def omp_host_output_file_path : Separate<["-"], "omp-host-output-file-path">,
+  HelpText<"Path to the host compilation resulting file">;
 def omp_dump_host_ir : Flag<["-"], "omp-dump-host-ir">,
   HelpText<"Dump LLVM IR generated for OpenMP host">;
 def omp_dump_target_ir : Flag<["-"], "omp-dump-target-ir">,

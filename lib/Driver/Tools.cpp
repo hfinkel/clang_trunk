@@ -191,10 +191,12 @@ static void addDirectoryList(const ArgList &Args,
   }
 }
 
-static void AddLTOInputs(Compilation &C, const JobAction &JA, const Tool &T,
+static bool AddLTOInputs(Compilation &C, const JobAction &JA, const Tool &T,
                          const ToolChain &TC, const InputInfo &Output,
                          const InputInfoList &Inputs, const ArgList &Args,
                          ArgStringList &CmdArgs) {
+  bool OpenMPRTIsBitcode = false;
+
   // When link-time optimization (LTO) is expected and we are generating a fat
   // binary because of an OpenMP target, we need to use ld because gold has
   // limited support for linker scripts. Unlike gold, ld does not support
@@ -206,45 +208,69 @@ static void AddLTOInputs(Compilation &C, const JobAction &JA, const Tool &T,
       LLVMLinkCmdArgs.push_back(II.getFilename());
     }
   }
+
   if (!LLVMLinkCmdArgs.empty()) {
-   // Gather bitcode files using llvm-link.
-   std::string TmpName =
-     C.getDriver().GetTemporaryPath(Output.getFilename(), "bc");
-   const char *ResultingBitcodeF = C.getArgs().MakeArgString(TmpName.c_str());
-   LLVMLinkCmdArgs.push_back("-o");
-   LLVMLinkCmdArgs.push_back(ResultingBitcodeF);
-   const char *LLVMLinkExec =
-     Args.MakeArgString(TC.getDriver().Dir + "/llvm-link");
-   C.addCommand(
-     llvm::make_unique<Command>(JA, T, LLVMLinkExec, LLVMLinkCmdArgs));
+    // Add LLVM bitcode for runtime library when possible.
+    for (std::string ArgString : CmdArgs) {
+      if (ArgString.length() > 2 && ArgString.substr(0, 2) == "-L") {
+        std::string LibPath = ArgString.substr(2, ArgString.length() - 2);
+        const char *OpenMPRTInput =
+            Args.MakeArgString(LibPath + "/libiomp5.bc");
+        if (llvm::sys::fs::exists(OpenMPRTInput)) {
+          LLVMLinkCmdArgs.push_back(OpenMPRTInput);
+          OpenMPRTIsBitcode = true;
+          break;
+        }
+      }
+    }
 
-   // Optimize resulting bitcode file using opt.
-   ArgStringList OptCmdArgs;
-   OptCmdArgs.push_back(ResultingBitcodeF);
-   OptCmdArgs.push_back("-O3"); // LTO
-   OptCmdArgs.push_back("-o");
-   OptCmdArgs.push_back(ResultingBitcodeF);
-   const char *OptExec =
-     Args.MakeArgString(TC.getDriver().Dir + "/opt");
-   C.addCommand(
-     llvm::make_unique<Command>(JA, T, OptExec, OptCmdArgs));
+    const char *ResultingBitcodeF;
+    std::string TmpName;
 
-   // Generate object file.
-   TmpName = C.getDriver().GetTemporaryPath(Output.getFilename(), "o");
+    StringRef Name = llvm::sys::path::filename(Output.getFilename());
+    std::pair<StringRef, StringRef> Split = Name.rsplit('.');
+    std::string FileName = Split.first.str();
+
+    if (OpenMPRTIsBitcode || LLVMLinkCmdArgs.size() > 1) {
+      // Gather bitcode files using llvm-link.
+      TmpName = C.getDriver().GetTemporaryPath(FileName, "bc");
+      ResultingBitcodeF = C.getArgs().MakeArgString(TmpName.c_str());
+      LLVMLinkCmdArgs.push_back("-o");
+      LLVMLinkCmdArgs.push_back(ResultingBitcodeF);
+      const char *LLVMLinkExec =
+          Args.MakeArgString(TC.getDriver().Dir + "/llvm-link");
+      C.addCommand(
+          llvm::make_unique<Command>(JA, T, LLVMLinkExec, LLVMLinkCmdArgs));
+
+      // Optimize resulting bitcode file using opt.
+      ArgStringList OptCmdArgs;
+      OptCmdArgs.push_back(ResultingBitcodeF);
+      OptCmdArgs.push_back("-O3"); // LTO
+      OptCmdArgs.push_back("-o");
+      OptCmdArgs.push_back(ResultingBitcodeF);
+      const char *OptExec = Args.MakeArgString(TC.getDriver().Dir + "/opt");
+      C.addCommand(llvm::make_unique<Command>(JA, T, OptExec, OptCmdArgs));
+    } else {
+      // Single object file, no LTO.
+      ResultingBitcodeF = C.getArgs().MakeArgString(LLVMLinkCmdArgs.back());
+    }
+
+    // Generate object file.
+    TmpName = C.getDriver().GetTemporaryPath(FileName, "o");
     const char *ObjectF = C.getArgs().MakeArgString(TmpName.c_str());
-   ArgStringList LlcCmdArgs;
-   LlcCmdArgs.push_back(ResultingBitcodeF);
-   LlcCmdArgs.push_back("-o");
-   LlcCmdArgs.push_back(ObjectF);
-   LlcCmdArgs.push_back("-filetype=obj");
-   const char *LlcExec =
-     Args.MakeArgString(TC.getDriver().Dir + "/llc");
-    C.addCommand(
-     llvm::make_unique<Command>(JA, T, LlcExec, LlcCmdArgs));
+    ArgStringList LlcCmdArgs;
+    LlcCmdArgs.push_back(ResultingBitcodeF);
+    LlcCmdArgs.push_back("-o");
+    LlcCmdArgs.push_back(ObjectF);
+    LlcCmdArgs.push_back("-filetype=obj");
+    const char *LlcExec = Args.MakeArgString(TC.getDriver().Dir + "/llc");
+    C.addCommand(llvm::make_unique<Command>(JA, T, LlcExec, LlcCmdArgs));
 
     // Add object file to linker inputs
     CmdArgs.push_back(ObjectF);
   }
+
+  return OpenMPRTIsBitcode;
 }
 
 static void AddLinkerInputs(const ToolChain &TC,
@@ -379,9 +405,9 @@ static void AddOpenMPLinkerScript(const ToolChain &TC, Compilation &C,
     std::string tgt_name(Targets[i].first);
     std::replace(tgt_name.begin(),tgt_name.end(),'-','_');
     lksf << "    . = ALIGN(0x10);\n";
-    lksf << "    __omptgt__img_start_" << tgt_name << " = .;\n";
+    lksf << "    PROVIDE_HIDDEN(__omptgt__img_start_" << tgt_name << " = .);\n";
     lksf << "    " << Targets[i].second << "\n";
-    lksf << "    __omptgt__img_end_" << tgt_name << " = .;\n";
+    lksf << "    PROVIDE_HIDDEN(__omptgt__img_end_" << tgt_name << " = .);\n";
   }
 
   lksf << "  }\n";
@@ -390,9 +416,9 @@ static void AddOpenMPLinkerScript(const ToolChain &TC, Compilation &C,
   lksf << "  ALIGN(0x10)\n";
   lksf << "  SUBALIGN(0x01)\n";
   lksf << "  {\n";
-  lksf << "    __omptgt__host_entries_begin = .;\n";
+  lksf << "    PROVIDE_HIDDEN(__omptgt__host_entries_begin = .);\n";
   lksf << "    *(.openmptgt_host_entries)\n";
-  lksf << "    __omptgt__host_entries_end = .;\n";
+  lksf << "    PROVIDE_HIDDEN(__omptgt__host_entries_end = .);\n";
   lksf << "  }\n";
   lksf << "}\n";
   lksf << "INSERT BEFORE .data\n";
@@ -814,7 +840,8 @@ StringRef tools::arm::getARMFloatABI(const Driver &D, const ArgList &Args,
       //
       // FIXME: Factor out an ARM class so we can cache the arch somewhere.
       std::string ArchName =
-        arm::getLLVMArchSuffixForARM(arm::getARMTargetCPU(Args, Triple));
+        arm::getLLVMArchSuffixForARM(arm::getARMTargetCPU(Args, Triple),
+                                     arm::getARMArch(Args, Triple));
       if (StringRef(ArchName).startswith("v6") ||
           StringRef(ArchName).startswith("v7"))
         FloatABI = "softfp";
@@ -857,7 +884,8 @@ StringRef tools::arm::getARMFloatABI(const Driver &D, const ArgList &Args,
         break;
       case llvm::Triple::Android: {
         std::string ArchName =
-          arm::getLLVMArchSuffixForARM(arm::getARMTargetCPU(Args, Triple));
+          arm::getLLVMArchSuffixForARM(arm::getARMTargetCPU(Args, Triple),
+                                       arm::getARMArch(Args, Triple));
         if (StringRef(ArchName).startswith("v7"))
           FloatABI = "softfp";
         else
@@ -932,6 +960,10 @@ static void getARMTargetFeatures(const Driver &D, const llvm::Triple &Triple,
       Features.push_back("+crc");
     else
       Features.push_back("-crc");
+  }
+
+  if (Triple.getSubArch() == llvm::Triple::SubArchType::ARMSubArch_v8_1a) {
+    Features.insert(Features.begin(), "+v8.1a");
   }
 }
 
@@ -1920,39 +1952,17 @@ void Clang::AddX86TargetArgs(const ArgList &Args,
   }
 }
 
-static inline bool HasPICArg(const ArgList &Args) {
-  return Args.hasArg(options::OPT_fPIC)
-    || Args.hasArg(options::OPT_fpic);
-}
-
-static Arg *GetLastSmallDataThresholdArg(const ArgList &Args) {
-  return Args.getLastArg(options::OPT_G,
-                         options::OPT_G_EQ,
-                         options::OPT_msmall_data_threshold_EQ);
-}
-
-static std::string GetHexagonSmallDataThresholdValue(const ArgList &Args) {
-  std::string value;
-  if (HasPICArg(Args))
-    value = "0";
-  else if (Arg *A = GetLastSmallDataThresholdArg(Args)) {
-    value = A->getValue();
-    A->claim();
-  }
-  return value;
-}
-
 void Clang::AddHexagonTargetArgs(const ArgList &Args,
                                  ArgStringList &CmdArgs) const {
   CmdArgs.push_back("-fno-signed-char");
   CmdArgs.push_back("-mqdsp6-compat");
   CmdArgs.push_back("-Wreturn-type");
 
-  std::string SmallDataThreshold = GetHexagonSmallDataThresholdValue(Args);
-  if (!SmallDataThreshold.empty()) {
+  if (const char* v = toolchains::Hexagon_TC::GetSmallDataThreshold(Args)) {
+    std::string SmallDataThreshold="-hexagon-small-data-threshold=";
+    SmallDataThreshold += v;
     CmdArgs.push_back ("-mllvm");
-    CmdArgs.push_back(Args.MakeArgString(
-                        "-hexagon-small-data-threshold=" + SmallDataThreshold));
+    CmdArgs.push_back(Args.MakeArgString(SmallDataThreshold));
   }
 
   if (!Args.hasArg(options::OPT_fno_short_enums))
@@ -2820,7 +2830,10 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
       getToolChain().getTriple().isWindowsCygwinEnvironment();
   bool IsWindowsMSVC = getToolChain().getTriple().isWindowsMSVCEnvironment();
 
-  assert(Inputs.size() == 1 && "Unable to handle multiple inputs.");
+  assert(((Inputs.size() == 1) ||
+          (Inputs.size() == 2 && JA.getOffloadingDevice() &&
+           isa<CompileJobAction>(JA))) &&
+         "Expecting 1 or 2 inputs (OpenMP host file)");
   const InputInfo &Input = Inputs[0];
 
   // Invoke ourselves in -cc1 mode.
@@ -2848,8 +2861,13 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
     }
 
     // inform the frontend we are generating code for a target
-    if ( JA.getOffloadingDevice() )
+    if (JA.getOffloadingDevice()) {
       CmdArgs.push_back("-omp-target-mode");
+      if (isa<CompileJobAction>(JA)) {
+        CmdArgs.push_back("-omp-host-output-file-path");
+        CmdArgs.push_back(Args.MakeArgString(Inputs[1].getFilename()));
+      }
+    }
 
     // the frontend components needs to know the path of the original source
     // file given that the target functions use that to generate a unique name
@@ -4906,14 +4924,12 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
     assert(Output.isNothing() && "Invalid output.");
   }
 
-  for (const auto &II : Inputs) {
-    addDashXForInput(Args, II, CmdArgs);
+  addDashXForInput(Args, Input, CmdArgs);
 
-    if (II.isFilename())
-      CmdArgs.push_back(II.getFilename());
-    else
-      II.getInputArg().renderAsInput(Args, CmdArgs);
-  }
+  if (Input.isFilename())
+    CmdArgs.push_back(Input.getFilename());
+  else
+    Input.getInputArg().renderAsInput(Args, CmdArgs);
 
   Args.AddAllArgs(CmdArgs, options::OPT_undef);
 
@@ -5650,10 +5666,8 @@ void hexagon::Assemble::ConstructJob(Compilation &C, const JobAction &JA,
     CmdArgs.push_back("-fsyntax-only");
   }
 
-  std::string SmallDataThreshold = GetHexagonSmallDataThresholdValue(Args);
-  if (!SmallDataThreshold.empty())
-    CmdArgs.push_back(
-      Args.MakeArgString(std::string("-G") + SmallDataThreshold));
+  if (const char* v = toolchains::Hexagon_TC::GetSmallDataThreshold(Args))
+    CmdArgs.push_back(Args.MakeArgString(std::string("-G") + v));
 
   Args.AddAllArgValues(CmdArgs, options::OPT_Wa_COMMA,
                        options::OPT_Xassembler);
@@ -5716,6 +5730,7 @@ static void constructHexagonLinkArgs(Compilation &C, const JobAction &JA,
   bool incStdLib = !Args.hasArg(options::OPT_nostdlib);
   bool incStartFiles = !Args.hasArg(options::OPT_nostartfiles);
   bool incDefLibs = !Args.hasArg(options::OPT_nodefaultlibs);
+  bool useG0 = false;
   bool useShared = buildingLib && !hasStaticArg;
 
   //----------------------------------------------------------------------------
@@ -5749,10 +5764,9 @@ static void constructHexagonLinkArgs(Compilation &C, const JobAction &JA,
   if (buildPIE && !buildingLib)
     CmdArgs.push_back("-pie");
 
-  std::string SmallDataThreshold = GetHexagonSmallDataThresholdValue(Args);
-  if (!SmallDataThreshold.empty()) {
-    CmdArgs.push_back(
-      Args.MakeArgString(std::string("-G") + SmallDataThreshold));
+  if (const char* v = toolchains::Hexagon_TC::GetSmallDataThreshold(Args)) {
+    CmdArgs.push_back(Args.MakeArgString(std::string("-G") + v));
+    useG0 = toolchains::Hexagon_TC::UsesG0(v);
   }
 
   //----------------------------------------------------------------------------
@@ -5768,8 +5782,7 @@ static void constructHexagonLinkArgs(Compilation &C, const JobAction &JA,
       toolchains::Hexagon_TC::GetGnuDir(D.InstalledDir, Args) + "/";
   const std::string StartFilesDir = RootDir
                                     + "hexagon/lib"
-                                    + (buildingLib
-                                       ? MarchG0Suffix : MarchSuffix);
+                                    + (useG0 ? MarchG0Suffix : MarchSuffix);
 
   //----------------------------------------------------------------------------
   // moslib
@@ -5873,9 +5886,8 @@ void hexagon::Link::ConstructJob(Compilation &C, const JobAction &JA,
 }
 // Hexagon tools end.
 
-/// Get the (LLVM) name of the minimum ARM CPU for the arch we are targeting.
-const char *arm::getARMCPUForMArch(const ArgList &Args,
-                                   const llvm::Triple &Triple) {
+const StringRef arm::getARMArch(const ArgList &Args,
+                                const llvm::Triple &Triple) {
   StringRef MArch;
   if (Arg *A = Args.getLastArg(options::OPT_march_EQ)) {
     // Otherwise, if we have -march= choose the base CPU for that arch.
@@ -5884,6 +5896,12 @@ const char *arm::getARMCPUForMArch(const ArgList &Args,
     // Otherwise, use the Arch from the triple.
     MArch = Triple.getArchName();
   }
+  return MArch;
+}
+/// Get the (LLVM) name of the minimum ARM CPU for the arch we are targeting.
+const char *arm::getARMCPUForMArch(const ArgList &Args,
+                                   const llvm::Triple &Triple) {
+  StringRef MArch = getARMArch(Args, Triple);
 
   // Handle -march=native.
   if (MArch == "native") {
@@ -5891,7 +5909,8 @@ const char *arm::getARMCPUForMArch(const ArgList &Args,
     if (CPU != "generic") {
       // Translate the native cpu into the architecture. The switch below will
       // then chose the minimum cpu for that arch.
-      MArch = std::string("arm") + arm::getLLVMArchSuffixForARM(CPU);
+      MArch = std::string("arm") + 
+        arm::getLLVMArchSuffixForARM(CPU, arm::getARMArch(Args, Triple));
     }
   }
 
@@ -5922,12 +5941,20 @@ StringRef arm::getARMTargetCPU(const ArgList &Args,
 }
 
 /// getLLVMArchSuffixForARM - Get the LLVM arch name to use for a particular
-/// CPU.
+/// CPU  (or Arch, if CPU is generic).
 //
 // FIXME: This is redundant with -mcpu, why does LLVM use this.
 // FIXME: tblgen this, or kill it!
 // FIXME: Use ARMTargetParser.
-const char *arm::getLLVMArchSuffixForARM(StringRef CPU) {
+const char *arm::getLLVMArchSuffixForARM(StringRef CPU, StringRef Arch) {
+  // FIXME: Use ARMTargetParser
+  if (CPU == "generic") {
+    if (Arch == "armv8.1a" || Arch == "armv8.1-a" ||
+        Arch == "armebv8.1a" || Arch == "armebv8.1-a") {
+      return "v8.1a";
+    }
+  }
+
   return llvm::StringSwitch<const char *>(CPU)
     .Case("strongarm", "v4")
     .Cases("arm7tdmi", "arm7tdmi-s", "arm710t", "v4t")
@@ -5954,11 +5981,13 @@ const char *arm::getLLVMArchSuffixForARM(StringRef CPU) {
     .Default("");
 }
 
-void arm::appendEBLinkFlags(const ArgList &Args, ArgStringList &CmdArgs, const llvm::Triple &Triple) {
+void arm::appendEBLinkFlags(const ArgList &Args, ArgStringList &CmdArgs, 
+                            const llvm::Triple &Triple) {
   if (Args.hasArg(options::OPT_r))
     return;
 
-  StringRef Suffix = getLLVMArchSuffixForARM(getARMCPUForMArch(Args, Triple));
+  StringRef Suffix = getLLVMArchSuffixForARM(getARMCPUForMArch(Args, Triple), 
+                                             getARMArch(Args, Triple));
   const char *LinkFlag = llvm::StringSwitch<const char *>(Suffix)
     .Cases("v4", "v4t", "v5", "v5e", nullptr)
     .Cases("v6", "v6k", "v6t2", nullptr)
@@ -8250,12 +8279,16 @@ void gnutools::Link::ConstructJob(Compilation &C, const JobAction &JA,
   // Do not use gold plugin when compiling with an OpenMP target, as usually
   // a linker script is required, and such scripts are poorly supported by
   // gold.
+  bool OpenMP = Args.hasArg(options::OPT_fopenmp);
+  bool OpenMPTarget = OpenMP && Args.hasArg(options::OPT_omptargets_EQ);
+  bool OpenMPRTIsBitcode = false;
   if (D.IsUsingLTO(getToolChain(), Args)) {
-    bool OpenMP = Args.hasArg(options::OPT_fopenmp);
-    if (!OpenMP || !Args.hasArg(options::OPT_omptargets_EQ))
+    if (!OpenMPTarget)
       AddGoldPlugin(ToolChain, Args, CmdArgs, JA.getOffloadingDevice());
-    else
-      AddLTOInputs(C, JA, *this, ToolChain, Output, Inputs, Args, CmdArgs);
+    else {
+      OpenMPRTIsBitcode =
+          AddLTOInputs(C, JA, *this, ToolChain, Output, Inputs, Args, CmdArgs);
+    }
   }
 
   if (Args.hasArg(options::OPT_Z_Xlinker__no_demangle))
@@ -8290,9 +8323,12 @@ void gnutools::Link::ConstructJob(Compilation &C, const JobAction &JA,
       if (NeedsSanitizerDeps)
         linkSanitizerRuntimeDeps(ToolChain, CmdArgs);
 
-      bool OpenMP = Args.hasArg(options::OPT_fopenmp);
       if (OpenMP) {
         CmdArgs.push_back("-liomp5");
+
+        if (OpenMPRTIsBitcode)
+          CmdArgs.push_back("-ldl");
+
         if (Args.hasArg(options::OPT_omptargets_EQ))
           CmdArgs.push_back("-lomptarget");
       }
@@ -9144,6 +9180,46 @@ void NVPTX::Assemble::ConstructJob(Compilation &C, const JobAction &JA,
   C.addCommand(llvm::make_unique<Command>(JA, *this, Exec, CmdArgs));
 }
 
+/// Helper function to generate *.cubin from *.bc file.
+static void BitcodeToCubin(Compilation &C, const JobAction &JA, const Tool &T,
+                           const ToolChain &TC, std::string Name,
+                           const char *BitcodeF, const ArgList &Args,
+                           ArgStringList &CmdArgs) {
+  std::string CPU = getCPUName(Args, TC.getTriple(), JA.getOffloadingDevice());
+
+  // Generate PTX.
+  std::string TmpName = C.getDriver().GetTemporaryPath(Name, "ptx");
+  const char *AsmF = C.getArgs().MakeArgString(TmpName.c_str());
+  ArgStringList LlcCmdArgs;
+  LlcCmdArgs.push_back(Args.MakeArgString(BitcodeF));
+  LlcCmdArgs.push_back("-o");
+  LlcCmdArgs.push_back(AsmF);
+  if (!CPU.empty()) {
+    std::string CPUFlag = "-mcpu=" + CPU;
+    LlcCmdArgs.push_back(C.getArgs().MakeArgString(CPUFlag));
+  }
+  const char *LlcExec = Args.MakeArgString(TC.getDriver().Dir + "/llc");
+  C.addCommand(llvm::make_unique<Command>(JA, T, LlcExec, LlcCmdArgs));
+
+  // Assemble PTX.
+  TmpName = C.getDriver().GetTemporaryPath(Name, "cubin");
+  const char *CubinF = C.getArgs().MakeArgString(TmpName.c_str());
+  ArgStringList AsCmdArgs;
+  AsCmdArgs.push_back(AsmF);
+  AsCmdArgs.push_back("-c");
+  AsCmdArgs.push_back("-o");
+  AsCmdArgs.push_back(CubinF);
+  if (!CPU.empty()) {
+    AsCmdArgs.push_back("-arch");
+    AsCmdArgs.push_back(Args.MakeArgString(CPU));
+  }
+  const char *AsExec = Args.MakeArgString(TC.GetProgramPath("ptxas"));
+  C.addCommand(llvm::make_unique<Command>(JA, T, AsExec, AsCmdArgs));
+
+  // Pass .cubin to nvlink
+  CmdArgs.push_back(CubinF);
+}
+
 void NVPTX::Link::ConstructJob(Compilation &C, const JobAction &JA,
                                    const InputInfo &Output,
                                    const InputInfoList &Inputs,
@@ -9175,6 +9251,68 @@ void NVPTX::Link::ConstructJob(Compilation &C, const JobAction &JA,
   // add linking against library implementing OpenMP calls on NVPTX target
   CmdArgs.push_back("-lomptarget-nvptx");
 
+  // Check if -lm was passed, in which case we need to link with the NVIDIA
+  // math library (libdevice).
+  bool LinkMath = false;
+  for (auto Arg : Args) {
+    if (Arg->getSpelling() == "-l") {
+      std::string Linkee = Arg->getValue();
+      if (Linkee == "m") {
+        LinkMath = true;
+        break;
+      }
+    }
+  }
+
+  // Search for NVIDIA math library (libdevice) when required.
+  std::string LibDevice;
+  if (LinkMath) {
+    // Reconstruct name of libdevice library.
+    std::string Version = Args.MakeArgString(CPU);
+    Version = Version.substr(2, Version.length() - 2); // remove "sm"
+    std::string LibDeviceName = "libdevice.compute" + Version + ".10.bc";
+    std::string LibDeviceInput;
+
+    // Find in -L<path> and LIBRARY_PATH.
+    ArgStringList LibraryPaths;
+    for (auto Arg : Args) {
+      if (Arg->getSpelling() == "-L") {
+        std::string Current = "-L";
+        Current += Arg->getValue();
+        LibraryPaths.push_back(Args.MakeArgString(Current.c_str()));
+      }
+    }
+    addDirectoryList(Args, LibraryPaths, "-L", "LIBRARY_PATH");
+
+    // Search.
+    bool FoundLibDevice = false;
+    for (std::string LibraryPath : LibraryPaths) {
+      LibraryPath = LibraryPath.substr(2, LibraryPath.length() - 2); // -L
+      LibDeviceInput = Args.MakeArgString(LibraryPath + "/" + LibDeviceName);
+      if (llvm::sys::fs::exists(LibDeviceInput.c_str())) {
+        FoundLibDevice = true;
+        break;
+      }
+    }
+
+    assert(FoundLibDevice && "Could not find libdevice in specified paths!");
+
+    // Optimize NVIDIA math library with -nvvm-reflect (for correctness).
+    ArgStringList OptCmdArgs;
+    OptCmdArgs.push_back(Args.MakeArgString(LibDeviceInput.c_str()));
+    OptCmdArgs.push_back("-O1");
+    OptCmdArgs.push_back("-nvvm-reflect");
+    OptCmdArgs.push_back("-o");
+    std::string TmpName = C.getDriver().GetTemporaryPath("libdevice", "bc");
+    const char *ResultingBitcodeF = C.getArgs().MakeArgString(TmpName);
+    OptCmdArgs.push_back(ResultingBitcodeF);
+    const char *OptExec =
+      Args.MakeArgString(getToolChain().getDriver().Dir + "/opt");
+    C.addCommand(
+      llvm::make_unique<Command>(JA, *this, OptExec, OptCmdArgs));
+    LibDevice = ResultingBitcodeF;
+  }
+
   // Check if link-time optimization (LTO) is expected. At this point, this
   // would be the case if some linker inputs were still in LLVM bitcode format.
   // Unlike gold, nvlink does not support LTO, so what we do is we manually
@@ -9185,62 +9323,54 @@ void NVPTX::Link::ConstructJob(Compilation &C, const JobAction &JA,
       LLVMLinkCmdArgs.push_back(II.getFilename());
     }
   }
-  if (!LLVMLinkCmdArgs.empty()) {
-    // Gather bitcode files using llvm-link.
-    std::string TmpName =
-      C.getDriver().GetTemporaryPath(Output.getFilename(), "bc");
-    const char *ResultingBitcodeF = C.getArgs().MakeArgString(TmpName.c_str());
-    LLVMLinkCmdArgs.push_back("-o");
-    LLVMLinkCmdArgs.push_back(ResultingBitcodeF);
-    const char *LLVMLinkExec =
-      Args.MakeArgString(getToolChain().getDriver().Dir + "/llvm-link");
-    C.addCommand(
-      llvm::make_unique<Command>(JA, *this, LLVMLinkExec, LLVMLinkCmdArgs));
+  bool LinkTimeOptimization = !LLVMLinkCmdArgs.empty();
 
-    // Optimize resulting bitcode file using opt.
-    ArgStringList OptCmdArgs;
-    OptCmdArgs.push_back(ResultingBitcodeF);
-    OptCmdArgs.push_back("-O3"); // LTO
-    OptCmdArgs.push_back("-o");
-    OptCmdArgs.push_back(ResultingBitcodeF);
-    const char *OptExec =
-      Args.MakeArgString(getToolChain().getDriver().Dir + "/opt");
-    C.addCommand(
-      llvm::make_unique<Command>(JA, *this, OptExec, OptCmdArgs));
-
-    // Generate PTX.
-    TmpName = C.getDriver().GetTemporaryPath(Output.getFilename(), "ptx");
-    const char *AsmF = C.getArgs().MakeArgString(TmpName.c_str());
-    ArgStringList LlcCmdArgs;
-    LlcCmdArgs.push_back(ResultingBitcodeF);
-    LlcCmdArgs.push_back("-o");
-    LlcCmdArgs.push_back(AsmF);
-    const char *LlcExec =
-      Args.MakeArgString(getToolChain().getDriver().Dir + "/llc");
-    C.addCommand(
-      llvm::make_unique<Command>(JA, *this, LlcExec, LlcCmdArgs));
-
-    // Assemble PTX.
-    TmpName = C.getDriver().GetTemporaryPath(Output.getFilename(), "cubin");
-    const char *CubinF = C.getArgs().MakeArgString(TmpName.c_str());
-    ArgStringList AsCmdArgs;
-    AsCmdArgs.push_back(AsmF);
-    AsCmdArgs.push_back("-c");
-    AsCmdArgs.push_back("-o");
-    AsCmdArgs.push_back(CubinF);
-    std::string CPU = getCPUName(Args, getToolChain().getTriple(),
-      JA.getOffloadingDevice());
-     if (!CPU.empty()) {
-      AsCmdArgs.push_back("-arch");
-      AsCmdArgs.push_back(Args.MakeArgString(CPU));
+  // Link against math library.
+  if (LinkMath) {
+    if (LinkTimeOptimization) {
+      LLVMLinkCmdArgs.push_back(Args.MakeArgString(LibDevice));
+    } else {
+      BitcodeToCubin(C, JA, *this, getToolChain(), "libdevice",
+                     LibDevice.c_str(), Args, CmdArgs);
     }
-    const char *AsExec =
-      Args.MakeArgString(getToolChain().GetProgramPath("ptxas"));
-    C.addCommand(
-      llvm::make_unique<Command>(JA, *this, AsExec, AsCmdArgs));
+  }
 
-    // Pass .cubin to nvlink
-    CmdArgs.push_back(CubinF);
+  // Eventually proceed with LTO.
+  if (LinkTimeOptimization) {
+    const char *ResultingBitcodeF;
+    std::string TmpName;
+
+    StringRef Name = llvm::sys::path::filename(Output.getFilename());
+    std::pair<StringRef, StringRef> Split = Name.rsplit('.');
+    std::string FileName = Split.first.str();
+
+    if (LLVMLinkCmdArgs.size() > 1) {
+      // Gather bitcode files using llvm-link.
+      TmpName = C.getDriver().GetTemporaryPath(FileName, "bc");
+      ResultingBitcodeF = C.getArgs().MakeArgString(TmpName.c_str());
+      LLVMLinkCmdArgs.push_back("-o");
+      LLVMLinkCmdArgs.push_back(ResultingBitcodeF);
+      const char *LLVMLinkExec =
+          Args.MakeArgString(getToolChain().getDriver().Dir + "/llvm-link");
+      C.addCommand(
+          llvm::make_unique<Command>(JA, *this, LLVMLinkExec, LLVMLinkCmdArgs));
+
+      // Optimize resulting bitcode file using opt.
+      ArgStringList OptCmdArgs;
+      OptCmdArgs.push_back(ResultingBitcodeF);
+      OptCmdArgs.push_back("-O3"); // LTO
+      OptCmdArgs.push_back("-o");
+      OptCmdArgs.push_back(ResultingBitcodeF);
+      const char *OptExec =
+          Args.MakeArgString(getToolChain().getDriver().Dir + "/opt");
+      C.addCommand(llvm::make_unique<Command>(JA, *this, OptExec, OptCmdArgs));
+    } else {
+      // Single object file, no LTO.
+      ResultingBitcodeF = C.getArgs().MakeArgString(LLVMLinkCmdArgs.back());
+    }
+
+    BitcodeToCubin(C, JA, *this, getToolChain(), FileName, ResultingBitcodeF,
+                   Args, CmdArgs);
   }
 
   // nvlink relies on the extension used by the input files
