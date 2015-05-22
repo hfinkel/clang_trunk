@@ -43,8 +43,8 @@ using namespace clang;
 
 namespace {
 
-/// \brief Retrieve the declaration context that should be used when mangling 
-/// the given declaration.
+/// Retrieve the declaration context that should be used when mangling the given
+/// declaration.
 static const DeclContext *getEffectiveDeclContext(const Decl *D) {
   // The ABI assumes that lambda closure types that occur within 
   // default arguments live in the context of the function. However, due to
@@ -213,7 +213,7 @@ public:
   /// @}
 };
 
-/// CXXNameMangler - Manage the mangling of a single name.
+/// Manage the mangling of a single name.
 class CXXNameMangler {
   ItaniumMangleContextImpl &Context;
   raw_ostream &Out;
@@ -224,7 +224,7 @@ class CXXNameMangler {
   const NamedDecl *Structor;
   unsigned StructorType;
 
-  /// SeqID - The next subsitution sequence number.
+  /// The next substitution sequence number.
   unsigned SeqID;
 
   class FunctionTypeDepthState {
@@ -540,7 +540,7 @@ static const DeclContext *IgnoreLinkageSpecDecls(const DeclContext *DC) {
   return DC;
 }
 
-/// isStd - Return whether a given namespace is the 'std' namespace.
+/// Return whether a given namespace is the 'std' namespace.
 static bool isStd(const NamespaceDecl *NS) {
   if (!IgnoreLinkageSpecDecls(getEffectiveParentContext(NS))
                                 ->isTranslationUnitOrDeclareTarget())
@@ -2890,9 +2890,9 @@ recurse:
 
   case Expr::UnresolvedMemberExprClass: {
     const UnresolvedMemberExpr *ME = cast<UnresolvedMemberExpr>(E);
-    mangleMemberExpr(ME->getBase(), ME->isArrow(),
-                     ME->getQualifier(), nullptr, ME->getMemberName(),
-                     Arity);
+    mangleMemberExpr(ME->isImplicitAccess() ? nullptr : ME->getBase(),
+                     ME->isArrow(), ME->getQualifier(), nullptr,
+                     ME->getMemberName(), Arity);
     if (ME->hasExplicitTemplateArgs())
       mangleTemplateArgs(ME->getExplicitTemplateArgs());
     break;
@@ -2901,8 +2901,9 @@ recurse:
   case Expr::CXXDependentScopeMemberExprClass: {
     const CXXDependentScopeMemberExpr *ME
       = cast<CXXDependentScopeMemberExpr>(E);
-    mangleMemberExpr(ME->getBase(), ME->isArrow(),
-                     ME->getQualifier(), ME->getFirstQualifierFoundInScope(),
+    mangleMemberExpr(ME->isImplicitAccess() ? nullptr : ME->getBase(),
+                     ME->isArrow(), ME->getQualifier(),
+                     ME->getFirstQualifierFoundInScope(),
                      ME->getMember(), Arity);
     if (ME->hasExplicitTemplateArgs())
       mangleTemplateArgs(ME->getExplicitTemplateArgs());
@@ -3644,8 +3645,8 @@ bool CXXNameMangler::mangleSubstitution(const NamedDecl *ND) {
   return mangleSubstitution(reinterpret_cast<uintptr_t>(ND));
 }
 
-/// \brief Determine whether the given type has any qualifiers that are
-/// relevant for substitutions.
+/// Determine whether the given type has any qualifiers that are relevant for
+/// substitutions.
 static bool hasMangledSubstitutionQualifiers(QualType T) {
   Qualifiers Qs = T.getQualifiers();
   return Qs.getCVRQualifiers() || Qs.hasAddressSpace();
@@ -3691,8 +3692,8 @@ static bool isCharType(QualType T) {
     T->isSpecificBuiltinType(BuiltinType::Char_U);
 }
 
-/// isCharSpecialization - Returns whether a given type is a template
-/// specialization of a given name with a single argument of type char.
+/// Returns whether a given type is a template specialization of a given name
+/// with a single argument of type char.
 static bool isCharSpecialization(QualType T, const char *Name) {
   if (T.isNull())
     return false;
@@ -3842,8 +3843,8 @@ void CXXNameMangler::addSubstitution(uintptr_t Ptr) {
 
 //
 
-/// \brief Mangles the name of the declaration D and emits that name to the
-/// given output stream.
+/// Mangles the name of the declaration D and emits that name to the given
+/// output stream.
 ///
 /// If the declaration D requires a mangled name, this routine will emit that
 /// mangled name to \p os and return true. Otherwise, \p os will be unchanged
@@ -3935,8 +3936,7 @@ void ItaniumMangleContextImpl::mangleCXXDtorThunk(
   Mangler.mangleFunctionEncoding(DD);
 }
 
-/// mangleGuardVariable - Returns the mangled name for a guard variable
-/// for the passed in VarDecl.
+/// Returns the mangled name for a guard variable for the passed in VarDecl.
 void ItaniumMangleContextImpl::mangleStaticGuardVariable(const VarDecl *D,
                                                          raw_ostream &Out) {
   //  <special-name> ::= GV <object name>       # Guard variable for one-time
