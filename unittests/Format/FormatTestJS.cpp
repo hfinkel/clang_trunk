@@ -151,6 +151,14 @@ TEST_F(FormatTestJS, ContainerLiterals) {
   // Arrow functions in object literals.
   verifyFormat("var x = {y: (a) => { return a; }};");
   verifyFormat("var x = {y: (a) => a};");
+
+  // Computed keys.
+  verifyFormat("var x = {[a]: 1, b: 2, [c]: 3};");
+  verifyFormat("var x = {\n"
+               "  [a]: 1,\n"
+               "  b: 2,\n"
+               "  [c]: 3,\n"
+               "};");
 }
 
 TEST_F(FormatTestJS, MethodsInObjectLiterals) {
@@ -237,6 +245,13 @@ TEST_F(FormatTestJS, FormatsFreestandingFunctions) {
                "  function inner2(a, b) { return a; }\n"
                "  inner2(a, b);\n"
                "}");
+}
+
+TEST_F(FormatTestJS, ArrayLiterals) {
+  verifyFormat("var aaaaa: List<SomeThing> = [\n"
+               "  new SomeThingAAAAAAAAAAAA(),\n"
+               "  new SomeThingBBBBBBBBB()\n"
+               "];");
 }
 
 TEST_F(FormatTestJS, FunctionLiterals) {
