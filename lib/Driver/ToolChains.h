@@ -327,9 +327,6 @@ public:
   /// Darwin - The base Darwin tool chain.
 class LLVM_LIBRARY_VISIBILITY Darwin : public MachO {
 public:
-  /// The host version.
-  unsigned DarwinVersion[3];
-
   /// Whether the information on the target has been initialized.
   //
   // FIXME: This should be eliminated. What we want to do is make this part of
@@ -347,15 +344,6 @@ public:
 
   /// The OS version we are targeting.
   mutable VersionTuple TargetVersion;
-
-private:
-  /// The default macosx-version-min of this tool chain; empty until
-  /// initialized.
-  std::string MacosxVersionMin;
-
-  /// The default ios-version-min of this tool chain; empty until
-  /// initialized.
-  std::string iOSVersionMin;
 
 private:
   void AddDeploymentTarget(llvm::opt::DerivedArgList &Args) const;
@@ -423,6 +411,7 @@ protected:
   }
 
   bool isTargetMacOS() const {
+    assert(TargetInitialized && "Target not initialized!");
     return TargetPlatform == MacOS;
   }
 
@@ -920,7 +909,27 @@ public:
                 const char *BoundArch,
                 bool isOpenMPTarget,
                 bool &isSuccess) const;
+};
 
+/// SHAVEToolChain - A tool chain using the compiler installed by the the
+// Movidius SDK into MV_TOOLS_DIR (which we assume will be copied to llvm's
+// installation dir) to perform all subcommands.
+class LLVM_LIBRARY_VISIBILITY SHAVEToolChain : public Generic_GCC {
+public:
+  SHAVEToolChain(const Driver &D, const llvm::Triple &Triple,
+            const llvm::opt::ArgList &Args);
+  ~SHAVEToolChain() override;
+
+  virtual Tool *SelectTool(const JobAction &JA) const override;
+
+protected:
+  Tool *getTool(Action::ActionClass AC) const override;
+  Tool *buildAssembler() const override;
+  Tool *buildLinker() const override;
+
+private:
+  mutable std::unique_ptr<Tool> Compiler;
+  mutable std::unique_ptr<Tool> Assembler;
 };
 
 } // end namespace toolchains

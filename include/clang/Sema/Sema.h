@@ -1326,7 +1326,9 @@ public:
   }
 
   /// Determine if the template parameter \p D has a visible default argument.
-  bool hasVisibleDefaultArgument(const NamedDecl *D);
+  bool
+  hasVisibleDefaultArgument(const NamedDecl *D,
+                            llvm::SmallVectorImpl<Module *> *Modules = nullptr);
 
   bool RequireCompleteType(SourceLocation Loc, QualType T,
                            TypeDiagnoser &Diagnoser);
@@ -1730,6 +1732,22 @@ public:
   void createImplicitModuleImportForErrorRecovery(SourceLocation Loc,
                                                   Module *Mod);
 
+  /// Kinds of missing import. Note, the values of these enumerators correspond
+  /// to %select values in diagnostics.
+  enum class MissingImportKind {
+    Declaration,
+    Definition,
+    DefaultArgument
+  };
+
+  /// \brief Diagnose that the specified declaration needs to be visible but
+  /// isn't, and suggest a module import that would resolve the problem.
+  void diagnoseMissingImport(SourceLocation Loc, NamedDecl *Decl,
+                             bool NeedDefinition, bool Recover = true);
+  void diagnoseMissingImport(SourceLocation Loc, NamedDecl *Decl,
+                             SourceLocation DeclLoc, ArrayRef<Module *> Modules,
+                             MissingImportKind MIK, bool Recover);
+
   /// \brief Retrieve a suitable printing policy.
   PrintingPolicy getPrintingPolicy() const {
     return getPrintingPolicy(Context, PP);
@@ -1850,10 +1868,10 @@ public:
   /// struct, or union).
   void ActOnTagStartDefinition(Scope *S, Decl *TagDecl);
 
+  typedef void *SkippedDefinitionContext;
+
   /// \brief Invoked when we enter a tag definition that we're skipping.
-  void ActOnTagStartSkippedDefinition(Scope *S, Decl *TD) {
-    PushDeclContext(S, cast<DeclContext>(TD));
-  }
+  SkippedDefinitionContext ActOnTagStartSkippedDefinition(Scope *S, Decl *TD);
 
   Decl *ActOnObjCContainerStartDefinition(Decl *IDecl);
 
@@ -1870,9 +1888,7 @@ public:
   void ActOnTagFinishDefinition(Scope *S, Decl *TagDecl,
                                 SourceLocation RBraceLoc);
 
-  void ActOnTagFinishSkippedDefinition() {
-    PopDeclContext();
-  }
+  void ActOnTagFinishSkippedDefinition(SkippedDefinitionContext Context);
 
   void ActOnObjCContainerFinishDefinition();
 
@@ -2824,6 +2840,7 @@ public:
                                       unsigned ArgNum, StringRef &Str,
                                       SourceLocation *ArgLocation = nullptr);
   bool checkSectionName(SourceLocation LiteralLoc, StringRef Str);
+  void checkTargetAttr(SourceLocation LiteralLoc, StringRef Str);
   bool checkMSInheritanceAttrOnDefinition(
       CXXRecordDecl *RD, SourceRange Range, bool BestCase,
       MSInheritanceAttr::Spelling SemanticSpelling);
@@ -8917,7 +8934,9 @@ private:
                               llvm::APSInt &Result);
   bool SemaBuiltinConstantArgRange(CallExpr *TheCall, int ArgNum,
                                    int Low, int High);
-
+  bool SemaBuiltinARMSpecialReg(unsigned BuiltinID, CallExpr *TheCall,
+                                int ArgNum, unsigned ExpectedFieldNum,
+                                bool AllowName);
 public:
   enum FormatStringType {
     FST_Scanf,

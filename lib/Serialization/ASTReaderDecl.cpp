@@ -369,7 +369,70 @@ namespace clang {
     void VisitOMPDeclareReductionDecl(OMPDeclareReductionDecl *D);
     void VisitOMPDeclareSimdDecl(OMPDeclareSimdDecl *D);
     void VisitOMPDeclareTargetDecl(OMPDeclareTargetDecl *D);
+
+    /// We've merged the definition \p MergedDef into the existing definition
+    /// \p Def. Ensure that \p Def is made visible whenever \p MergedDef is made
+    /// visible.
+    void mergeDefinitionVisibility(NamedDecl *Def, NamedDecl *MergedDef) {
+      if (Def->isHidden()) {
+        // If MergedDef is visible or becomes visible, make the definition visible.
+        if (!MergedDef->isHidden())
+          Def->Hidden = false;
+        else if (Reader.getContext().getLangOpts().ModulesLocalVisibility) {
+          Reader.getContext().mergeDefinitionIntoModule(
+              Def, MergedDef->getImportedOwningModule(),
+              /*NotifyListeners*/ false);
+          Reader.PendingMergedDefinitionsToDeduplicate.insert(Def);
+        } else {
+          auto SubmoduleID = MergedDef->getOwningModuleID();
+          assert(SubmoduleID && "hidden definition in no module");
+          Reader.HiddenNamesMap[Reader.getSubmodule(SubmoduleID)].push_back(Def);
+        }
+      }
+    }
   };
+}
+
+namespace {
+/// Iterator over the redeclarations of a declaration that have already
+/// been merged into the same redeclaration chain.
+template<typename DeclT>
+class MergedRedeclIterator {
+  DeclT *Start, *Canonical, *Current;
+public:
+  MergedRedeclIterator() : Current(nullptr) {}
+  MergedRedeclIterator(DeclT *Start)
+      : Start(Start), Canonical(nullptr), Current(Start) {}
+
+  DeclT *operator*() { return Current; }
+
+  MergedRedeclIterator &operator++() {
+    if (Current->isFirstDecl()) {
+      Canonical = Current;
+      Current = Current->getMostRecentDecl();
+    } else
+      Current = Current->getPreviousDecl();
+
+    // If we started in the merged portion, we'll reach our start position
+    // eventually. Otherwise, we'll never reach it, but the second declaration
+    // we reached was the canonical declaration, so stop when we see that one
+    // again.
+    if (Current == Start || Current == Canonical)
+      Current = nullptr;
+    return *this;
+  }
+
+  friend bool operator!=(const MergedRedeclIterator &A,
+                         const MergedRedeclIterator &B) {
+    return A.Current != B.Current;
+  }
+};
+}
+template<typename DeclT>
+llvm::iterator_range<MergedRedeclIterator<DeclT>> merged_redecls(DeclT *D) {
+  return llvm::iterator_range<MergedRedeclIterator<DeclT>>(
+      MergedRedeclIterator<DeclT>(D),
+      MergedRedeclIterator<DeclT>());
 }
 
 uint64_t ASTDeclReader::GetCurrentCursorOffset() {
@@ -589,9 +652,21 @@ void ASTDeclReader::VisitEnumDecl(EnumDecl *ED) {
   if (ED->IsCompleteDefinition &&
       Reader.getContext().getLangOpts().Modules &&
       Reader.getContext().getLangOpts().CPlusPlus) {
-    if (EnumDecl *&OldDef = Reader.EnumDefinitions[ED->getCanonicalDecl()]) {
+    EnumDecl *&OldDef = Reader.EnumDefinitions[ED->getCanonicalDecl()];
+    if (!OldDef) {
+      // This is the first time we've seen an imported definition. Look for a
+      // local definition before deciding that we are the first definition.
+      for (auto *D : merged_redecls(ED->getCanonicalDecl())) {
+        if (!D->isFromASTFile() && D->isCompleteDefinition()) {
+          OldDef = D;
+          break;
+        }
+      }
+    }
+    if (OldDef) {
       Reader.MergedDeclContexts.insert(std::make_pair(ED, OldDef));
       ED->IsCompleteDefinition = false;
+      mergeDefinitionVisibility(OldDef, ED);
     } else {
       OldDef = ED;
     }
@@ -1404,23 +1479,7 @@ void ASTDeclReader::MergeDefinitionData(
   if (DD.Definition != MergeDD.Definition) {
     Reader.MergedLookups[DD.Definition].push_back(MergeDD.Definition);
     DD.Definition->setHasExternalVisibleStorage();
-
-    if (DD.Definition->isHidden()) {
-      // If MergeDD is visible or becomes visible, make the definition visible.
-      if (!MergeDD.Definition->isHidden())
-        DD.Definition->Hidden = false;
-      else if (Reader.getContext().getLangOpts().ModulesLocalVisibility) {
-        Reader.getContext().mergeDefinitionIntoModule(
-            DD.Definition, MergeDD.Definition->getImportedOwningModule(),
-            /*NotifyListeners*/ false);
-        Reader.PendingMergedDefinitionsToDeduplicate.insert(DD.Definition);
-      } else {
-        auto SubmoduleID = MergeDD.Definition->getOwningModuleID();
-        assert(SubmoduleID && "hidden definition in no module");
-        Reader.HiddenNamesMap[Reader.getSubmodule(SubmoduleID)].push_back(
-            DD.Definition);
-      }
-    }
+    mergeDefinitionVisibility(DD.Definition, MergeDD.Definition);
   }
 
   auto PFDI = Reader.PendingFakeDefinitionData.find(&DD);
@@ -2977,13 +3036,13 @@ static void inheritDefaultTemplateArguments(ASTContext &Context,
     NamedDecl *ToParam = ToTP->getParam(N - I - 1);
 
     if (auto *FTTP = dyn_cast<TemplateTypeParmDecl>(FromParam)) {
-      if (inheritDefaultTemplateArgument(Context, FTTP, ToParam))
+      if (!inheritDefaultTemplateArgument(Context, FTTP, ToParam))
         break;
     } else if (auto *FNTTP = dyn_cast<NonTypeTemplateParmDecl>(FromParam)) {
-      if (inheritDefaultTemplateArgument(Context, FNTTP, ToParam))
+      if (!inheritDefaultTemplateArgument(Context, FNTTP, ToParam))
         break;
     } else {
-      if (inheritDefaultTemplateArgument(
+      if (!inheritDefaultTemplateArgument(
               Context, cast<TemplateTemplateParmDecl>(FromParam), ToParam))
         break;
     }
@@ -3682,48 +3741,6 @@ void ASTReader::loadObjCCategories(serialization::GlobalDeclID ID,
   ObjCCategoriesVisitor Visitor(*this, ID, D, CategoriesDeserialized,
                                 PreviousGeneration);
   ModuleMgr.visit(ObjCCategoriesVisitor::visit, &Visitor);
-}
-
-namespace {
-/// Iterator over the redeclarations of a declaration that have already
-/// been merged into the same redeclaration chain.
-template<typename DeclT>
-class MergedRedeclIterator {
-  DeclT *Start, *Canonical, *Current;
-public:
-  MergedRedeclIterator() : Current(nullptr) {}
-  MergedRedeclIterator(DeclT *Start)
-      : Start(Start), Canonical(nullptr), Current(Start) {}
-
-  DeclT *operator*() { return Current; }
-
-  MergedRedeclIterator &operator++() {
-    if (Current->isFirstDecl()) {
-      Canonical = Current;
-      Current = Current->getMostRecentDecl();
-    } else
-      Current = Current->getPreviousDecl();
-
-    // If we started in the merged portion, we'll reach our start position
-    // eventually. Otherwise, we'll never reach it, but the second declaration
-    // we reached was the canonical declaration, so stop when we see that one
-    // again.
-    if (Current == Start || Current == Canonical)
-      Current = nullptr;
-    return *this;
-  }
-
-  friend bool operator!=(const MergedRedeclIterator &A,
-                         const MergedRedeclIterator &B) {
-    return A.Current != B.Current;
-  }
-};
-}
-template<typename DeclT>
-llvm::iterator_range<MergedRedeclIterator<DeclT>> merged_redecls(DeclT *D) {
-  return llvm::iterator_range<MergedRedeclIterator<DeclT>>(
-      MergedRedeclIterator<DeclT>(D),
-      MergedRedeclIterator<DeclT>());
 }
 
 template<typename DeclT, typename Fn>

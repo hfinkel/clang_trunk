@@ -1007,7 +1007,7 @@ Corrected:
 
   // Check for a tag type hidden by a non-type decl in a few cases where it
   // seems likely a type is wanted instead of the non-type that was found.
-  bool NextIsOp = NextToken.is(tok::amp) || NextToken.is(tok::star);
+  bool NextIsOp = NextToken.isOneOf(tok::amp, tok::star);
   if ((NextToken.is(tok::identifier) ||
        (NextIsOp &&
         FirstDecl->getUnderlyingDecl()->isFunctionOrFunctionTemplate())) &&
@@ -1079,6 +1079,22 @@ void Sema::PopDeclContext() {
 
   CurContext = getContainingDC(CurContext);
   assert(CurContext && "Popped translation unit!");
+}
+
+Sema::SkippedDefinitionContext Sema::ActOnTagStartSkippedDefinition(Scope *S,
+                                                                    Decl *D) {
+  // Unlike PushDeclContext, the context to which we return is not necessarily
+  // the containing DC of TD, because the new context will be some pre-existing
+  // TagDecl definition instead of a fresh one.
+  auto Result = static_cast<SkippedDefinitionContext>(CurContext);
+  CurContext = cast<TagDecl>(D)->getDefinition();
+  assert(CurContext && "skipping definition of undefined tag");
+  S->setEntity(CurContext);
+  return Result;
+}
+
+void Sema::ActOnTagFinishSkippedDefinition(SkippedDefinitionContext Context) {
+  CurContext = static_cast<decltype(CurContext)>(Context);
 }
 
 /// EnterDeclaratorContext - Used when we must lookup names in the context
@@ -2449,6 +2465,28 @@ static void mergeParamDeclAttributes(ParmVarDecl *newDecl,
   if (!foundAny) newDecl->dropAttrs();
 }
 
+static void mergeParamDeclTypes(ParmVarDecl *NewParam,
+                                const ParmVarDecl *OldParam,
+                                Sema &S) {
+  if (auto Oldnullability = OldParam->getType()->getNullability(S.Context)) {
+    if (auto Newnullability = NewParam->getType()->getNullability(S.Context)) {
+      if (*Oldnullability != *Newnullability) {
+        S.Diag(NewParam->getLocation(), diag::warn_mismatched_nullability_attr)
+          << static_cast<unsigned>(*Newnullability)
+          << static_cast<unsigned>(*Oldnullability);
+        S.Diag(OldParam->getLocation(), diag::note_previous_declaration);
+      }
+    }
+    else {
+      QualType NewT = NewParam->getType();
+      NewT = S.Context.getAttributedType(
+                         AttributedType::getNullabilityAttrKind(*Oldnullability),
+                         NewT, NewT);
+      NewParam->setType(NewT);
+    }
+  }
+}
+
 namespace {
 
 /// Used in MergeFunctionDecl to keep track of function parameters in
@@ -3085,9 +3123,12 @@ bool Sema::MergeCompatibleFunctionDecls(FunctionDecl *New, FunctionDecl *Old,
   // Merge attributes from the parameters.  These can mismatch with K&R
   // declarations.
   if (New->getNumParams() == Old->getNumParams())
-    for (unsigned i = 0, e = New->getNumParams(); i != e; ++i)
-      mergeParamDeclAttributes(New->getParamDecl(i), Old->getParamDecl(i),
-                               *this);
+      for (unsigned i = 0, e = New->getNumParams(); i != e; ++i) {
+        ParmVarDecl *NewParam = New->getParamDecl(i);
+        ParmVarDecl *OldParam = Old->getParamDecl(i);
+        mergeParamDeclAttributes(NewParam, OldParam, *this);
+        mergeParamDeclTypes(NewParam, OldParam, *this);
+      }
 
   if (getLangOpts().CPlusPlus)
     return MergeCXXFunctionDecl(New, Old, S);
@@ -5847,7 +5888,7 @@ Sema::ActOnVariableDeclarator(Scope *S, Declarator &D, DeclContext *DC,
   ProcessDeclAttributes(S, NewVD, D);
 
   if (getLangOpts().CUDA) {
-    if (EmitTLSUnsupportedError && DeclAttrsMatchCUDAMode(getLangOpts(), NewVD))
+    if (EmitTLSUnsupportedError && DeclAttrsMatchLanguage(getLangOpts(), NewVD))
       Diag(D.getDeclSpec().getThreadStorageClassSpecLoc(),
            diag::err_thread_unsupported);
     // CUDA B.2.5: "__shared__ and __constant__ variables have implied static
@@ -13515,7 +13556,6 @@ Sema::SkipBodyInfo Sema::shouldSkipAnonEnumBody(Scope *S, IdentifierInfo *II,
       !hasVisibleDefinition(cast<NamedDecl>(PrevECD->getDeclContext()),
                             &Hidden)) {
     SkipBodyInfo Skip;
-    Skip.ShouldSkip = true;
     Skip.Previous = Hidden;
     return Skip;
   }

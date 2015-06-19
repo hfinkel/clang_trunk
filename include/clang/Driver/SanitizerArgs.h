@@ -23,13 +23,13 @@ class ToolChain;
 class SanitizerArgs {
   SanitizerSet Sanitizers;
   SanitizerSet RecoverableSanitizers;
+  SanitizerSet TrapSanitizers;
 
   std::vector<std::string> BlacklistFiles;
   int CoverageFeatures;
   int MsanTrackOrigins;
   int AsanFieldPadding;
   bool AsanZeroBaseShadow;
-  bool UbsanTrapOnError;
   bool AsanSharedRuntime;
   bool LinkCXXRuntimes;
 
@@ -47,6 +47,9 @@ class SanitizerArgs {
   }
   bool needsUbsanRt() const;
   bool needsDfsanRt() const { return Sanitizers.has(SanitizerKind::DataFlow); }
+  bool needsSafeStackRt() const {
+    return Sanitizers.has(SanitizerKind::SafeStack);
+  }
 
   bool requiresPIE() const;
   bool needsUnwindTables() const;
