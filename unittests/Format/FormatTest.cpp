@@ -616,6 +616,18 @@ TEST_F(FormatTest, ForEachLoops) {
                "  BOOST_FOREACH (Item *item, itemlist) {}\n"
                "  UNKNOWN_FORACH(Item * item, itemlist) {}\n"
                "}");
+
+  // As function-like macros.
+  verifyFormat("#define foreach(x, y)\n"
+               "#define Q_FOREACH(x, y)\n"
+               "#define BOOST_FOREACH(x, y)\n"
+               "#define UNKNOWN_FOREACH(x, y)\n");
+
+  // Not as function-like macros.
+  verifyFormat("#define foreach (x, y)\n"
+               "#define Q_FOREACH (x, y)\n"
+               "#define BOOST_FOREACH (x, y)\n"
+               "#define UNKNOWN_FOREACH (x, y)\n");
 }
 
 TEST_F(FormatTest, FormatsWhileLoop) {
@@ -1337,6 +1349,16 @@ TEST_F(FormatTest, SplitsLongCxxComments) {
             "// one line",
             format("// A comment that doesn't fit on one line",
                    getLLVMStyleWithColumns(20)));
+  EXPECT_EQ("/// A comment that\n"
+            "/// doesn't fit on\n"
+            "/// one line",
+            format("/// A comment that doesn't fit on one line",
+                   getLLVMStyleWithColumns(20)));
+  EXPECT_EQ("//! A comment that\n"
+            "//! doesn't fit on\n"
+            "//! one line",
+            format("//! A comment that doesn't fit on one line",
+                   getLLVMStyleWithColumns(20)));
   EXPECT_EQ("// a b c d\n"
             "// e f  g\n"
             "// h i j k",
@@ -1357,6 +1379,12 @@ TEST_F(FormatTest, SplitsLongCxxComments) {
   EXPECT_EQ("// Add leading\n"
             "// whitespace",
             format("//Add leading whitespace", getLLVMStyleWithColumns(20)));
+  EXPECT_EQ("/// Add leading\n"
+            "/// whitespace",
+            format("///Add leading whitespace", getLLVMStyleWithColumns(20)));
+  EXPECT_EQ("//! Add leading\n"
+            "//! whitespace",
+            format("//!Add leading whitespace", getLLVMStyleWithColumns(20)));
   EXPECT_EQ("// whitespace", format("//whitespace", getLLVMStyle()));
   EXPECT_EQ("// Even if it makes the line exceed the column\n"
             "// limit",
@@ -10548,7 +10576,10 @@ TEST_F(FormatTest, DisableRegions) {
                    "   int   k;"));
 }
 
-TEST_F(FormatTest, DoNotCrashOnInvalidInput) { format("? ) ="); }
+TEST_F(FormatTest, DoNotCrashOnInvalidInput) {
+  format("? ) =");
+  verifyNoCrash("#define a\\\n /**/}");
+}
 
 } // end namespace tooling
 } // end namespace clang
