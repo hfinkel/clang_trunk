@@ -2190,7 +2190,7 @@ def err_attribute_invalid_on_stmt : Error<
   "%0 attribute cannot be applied to a statement">;
 def warn_declspec_attribute_ignored : Warning<
   "attribute %0 is ignored, place it after "
-  "\"%select{class|struct|union|interface|enum}1\" to apply attribute to "
+  "\"%select{class|struct|interface|union|enum}1\" to apply attribute to "
   "type declaration">, InGroup<IgnoredAttributes>;
 def warn_attribute_precede_definition : Warning<
   "attribute declaration must precede definition">,
@@ -2751,8 +2751,8 @@ def warn_ns_attribute_wrong_return_type : Warning<
   "return %select{an Objective-C object|a pointer|a non-retainable pointer}2">,
   InGroup<IgnoredAttributes>;
 def warn_ns_attribute_wrong_parameter_type : Warning<
-  "%0 attribute only applies to %select{Objective-C object|pointer}1 "
-  "parameters">,
+  "%0 attribute only applies to "
+  "%select{Objective-C object|pointer|pointer-to-CF-pointer}1 parameters">,
   InGroup<IgnoredAttributes>;
 def warn_objc_requires_super_protocol : Warning<
   "%0 attribute cannot be applied to %select{methods in protocols|dealloc}1">,
@@ -7659,9 +7659,11 @@ def warn_profile_data_unprofiled : Warning<
 
 let CategoryName = "Nullability Issue" in {
 
-def warn_duplicate_nullability : Warning<
-  "duplicate nullability specifier "
-  "'%select{__nonnull|__nullable|__null_unspecified}0'">,
+def warn_mismatched_nullability_attr : Warning<
+  "nullability specifier "
+  "'%select{__|}1%select{nonnull|nullable|null_unspecified}0' "
+  "conflicts with existing specifier "
+  "'%select{__|}3%select{nonnull|nullable|null_unspecified}2'">,
   InGroup<Nullability>;
 
 def warn_nullability_declspec : Warning<
@@ -7673,15 +7675,36 @@ def warn_nullability_declspec : Warning<
   InGroup<NullabilityDeclSpec>,
   DefaultError;
 
+def note_nullability_here : Note<
+  "'%select{__nonnull|__nullable|__null_unspecified}0' specified here">;
+
 def err_nullability_nonpointer : Error<
   "nullability specifier "
-  "'%select{__nonnull|__nullable|__null_unspecified}0' cannot be applied to "
-  "non-pointer type %1">;
+  "'%select{__|}1%select{nonnull|nullable|null_unspecified}0' cannot be applied "
+  "to non-pointer type %2">;
 
-def err_nullability_conflicting : Error<
-  "nullability specifier "
-  "'%select{__nonnull|__nullable|__null_unspecified}0' conflicts with existing "
-  "specifier '%select{__nonnull|__nullable|__null_unspecified}1'">;
+def warn_nullability_lost : Warning<
+  "implicit conversion from nullable pointer %0 to non-nullable pointer "
+  "type %1">,
+  InGroup<NullableToNonNullConversion>, DefaultIgnore;
+
+def err_nullability_cs_multilevel : Error<
+  "nullability keyword "
+  "'%select{nonnull|nullable|null_unspecified}0' cannot be applied to "
+  "multi-level pointer type %1">;
+def note_nullability_type_specifier : Note<
+  "use nullability type specifier "
+  "'%select{__nonnull|__nullable|__null_unspecified}0' to affect the innermost "
+  "pointer type of %1">;
+
+def warn_null_resettable_setter : Warning<
+  "synthesized setter %0 for null_resettable property %1 does not handle nil">,
+  InGroup<Nullability>;
+
+def warn_nullability_missing : Warning<
+  "%select{pointer|block pointer|member pointer}0 is missing a nullability "
+  "type specifier (__nonnull, __nullable, or __null_unspecified)">,
+  InGroup<NullabilityCompleteness>;
 
 }
 
