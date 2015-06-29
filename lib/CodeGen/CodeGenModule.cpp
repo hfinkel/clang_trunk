@@ -146,8 +146,9 @@ CodeGenModule::CodeGenModule(ASTContext &C, const CodeGenOptions &CGO,
         llvm::IndexedInstrProfReader::create(CodeGenOpts.InstrProfileInput);
     if (std::error_code EC = ReaderOrErr.getError()) {
       unsigned DiagID = Diags.getCustomDiagID(DiagnosticsEngine::Error,
-                                              "Could not read profile: %0");
-      getDiags().Report(DiagID) << EC.message();
+                                              "Could not read profile %0: %1");
+      getDiags().Report(DiagID) << CodeGenOpts.InstrProfileInput
+                                << EC.message();
     } else
       PGOReader = std::move(ReaderOrErr.get());
   }
@@ -1525,7 +1526,7 @@ namespace {
         return false;
       }
       unsigned BuiltinID = FD->getBuiltinID();
-      if (!BuiltinID)
+      if (!BuiltinID || !BI.isLibFunction(BuiltinID))
         return true;
       StringRef BuiltinName = BI.GetName(BuiltinID);
       if (BuiltinName.startswith("__builtin_") &&
@@ -1554,7 +1555,12 @@ CodeGenModule::isTriviallyRecursive(const FunctionDecl *FD) {
     Name = FD->getName();
   }
 
-  FunctionIsDirectlyRecursive Walker(Name, Context.BuiltinInfo);
+  auto &BI = Context.BuiltinInfo;
+  unsigned BuiltinID = Context.Idents.get(Name).getBuiltinID();
+  if (!BuiltinID || !BI.isPredefinedLibFunction(BuiltinID))
+    return false;
+
+  FunctionIsDirectlyRecursive Walker(Name, BI);
   Walker.TraverseFunctionDecl(const_cast<FunctionDecl*>(FD));
   return Walker.Result;
 }

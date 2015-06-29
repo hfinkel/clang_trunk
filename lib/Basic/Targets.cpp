@@ -2260,7 +2260,9 @@ public:
   bool handleTargetFeatures(std::vector<std::string> &Features,
                             DiagnosticsEngine &Diags) override;
   StringRef getABI() const override {
-    if (getTriple().getArch() == llvm::Triple::x86_64 && SSELevel >= AVX)
+    if (getTriple().getArch() == llvm::Triple::x86_64 && SSELevel >= AVX512F)
+      return "avx512";
+    else if (getTriple().getArch() == llvm::Triple::x86_64 && SSELevel >= AVX)
       return "avx";
     else if (getTriple().getArch() == llvm::Triple::x86 &&
              MMX3DNowLevel == NoMMX3DNow)
@@ -4255,6 +4257,9 @@ public:
     SoftFloat = SoftFloatABI = false;
     HWDiv = 0;
 
+    // This does not diagnose illegal cases like having both
+    // "+vfpv2" and "+vfpv3" or having "+neon" and "+fp-only-sp".
+    uint32_t HW_FP_remove = 0;
     for (const auto &Feature : Features) {
       if (Feature == "+soft-float") {
         SoftFloat = true;
@@ -4262,19 +4267,19 @@ public:
         SoftFloatABI = true;
       } else if (Feature == "+vfp2") {
         FPU |= VFP2FPU;
-        HW_FP = HW_FP_SP | HW_FP_DP;
+        HW_FP |= HW_FP_SP | HW_FP_DP;
       } else if (Feature == "+vfp3") {
         FPU |= VFP3FPU;
-        HW_FP = HW_FP_SP | HW_FP_DP;
+        HW_FP |= HW_FP_SP | HW_FP_DP;
       } else if (Feature == "+vfp4") {
         FPU |= VFP4FPU;
-        HW_FP = HW_FP_SP | HW_FP_DP | HW_FP_HP;
+        HW_FP |= HW_FP_SP | HW_FP_DP | HW_FP_HP;
       } else if (Feature == "+fp-armv8") {
         FPU |= FPARMV8;
-        HW_FP = HW_FP_SP | HW_FP_DP | HW_FP_HP;
+        HW_FP |= HW_FP_SP | HW_FP_DP | HW_FP_HP;
       } else if (Feature == "+neon") {
         FPU |= NeonFPU;
-        HW_FP = HW_FP_SP | HW_FP_DP;
+        HW_FP |= HW_FP_SP | HW_FP_DP;
       } else if (Feature == "+hwdiv") {
         HWDiv |= HWDivThumb;
       } else if (Feature == "+hwdiv-arm") {
@@ -4284,9 +4289,10 @@ public:
       } else if (Feature == "+crypto") {
         Crypto = 1;
       } else if (Feature == "+fp-only-sp") {
-        HW_FP &= ~HW_FP_DP;
+        HW_FP_remove |= HW_FP_DP | HW_FP_HP;
       }
     }
+    HW_FP &= ~HW_FP_remove;
 
     if (!(FPU & NeonFPU) && FPMath == FP_Neon) {
       Diags.Report(diag::err_target_unsupported_fpmath) << "neon";
