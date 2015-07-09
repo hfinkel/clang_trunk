@@ -818,14 +818,6 @@ bool Driver::HandleImmediateArgs(const Compilation &C) {
     }
     return false;
   }
-
-  if (C.getArgs().hasArg(options::OPT_print_multi_os_directory)) {
-    // FIXME: This should print out "lib/../lib", "lib/../lib64", or
-    // "lib/../lib32" as appropriate for the toolchain. For now, print
-    // nothing because it's not supported yet.
-    return false;
-  }
-
   return true;
 }
 
@@ -2318,19 +2310,13 @@ static llvm::Triple computeTargetTriple(StringRef DefaultTargetTriple,
   if (Arg *A = Args.getLastArg(options::OPT_mlittle_endian,
                                options::OPT_mbig_endian)) {
     if (A->getOption().matches(options::OPT_mlittle_endian)) {
-      if (Target.getArch() == llvm::Triple::mips)
-        Target.setArch(llvm::Triple::mipsel);
-      else if (Target.getArch() == llvm::Triple::mips64)
-        Target.setArch(llvm::Triple::mips64el);
-      else if (Target.getArch() == llvm::Triple::aarch64_be)
-        Target.setArch(llvm::Triple::aarch64);
+      llvm::Triple LE = Target.getLittleEndianArchVariant();
+      if (LE.getArch() != llvm::Triple::UnknownArch)
+        Target = std::move(LE);
     } else {
-      if (Target.getArch() == llvm::Triple::mipsel)
-        Target.setArch(llvm::Triple::mips);
-      else if (Target.getArch() == llvm::Triple::mips64el)
-        Target.setArch(llvm::Triple::mips64);
-      else if (Target.getArch() == llvm::Triple::aarch64)
-        Target.setArch(llvm::Triple::aarch64_be);
+      llvm::Triple BE = Target.getBigEndianArchVariant();
+      if (BE.getArch() != llvm::Triple::UnknownArch)
+        Target = std::move(BE);
     }
   }
 
