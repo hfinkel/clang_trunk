@@ -572,8 +572,7 @@ struct QualifierInfo {
   /// setTemplateParameterListsInfo - Sets info about "outer" template
   /// parameter lists.
   void setTemplateParameterListsInfo(ASTContext &Context,
-                                     unsigned NumTPLists,
-                                     TemplateParameterList **TPLists);
+                                     ArrayRef<TemplateParameterList *> TPLists);
 
 private:
   // Copy constructor and copy assignment are disabled.
@@ -658,8 +657,8 @@ public:
     assert(index < getNumTemplateParameterLists());
     return getExtInfo()->TemplParamLists[index];
   }
-  void setTemplateParameterListsInfo(ASTContext &Context, unsigned NumTPLists,
-                                     TemplateParameterList **TPLists);
+  void setTemplateParameterListsInfo(ASTContext &Context,
+                                     ArrayRef<TemplateParameterList *> TPLists);
 
   SourceLocation getTypeSpecStartLoc() const;
 
@@ -814,6 +813,9 @@ protected:
 
     /// \brief Whether this variable is (C++0x) constexpr.
     unsigned IsConstexpr : 1;
+
+    /// \brief Whether this variable is a (C++ Concepts TS) concept.
+    unsigned IsConcept : 1;
 
     /// \brief Whether this variable is the implicit variable for a lambda
     /// init-capture.
@@ -1236,6 +1238,15 @@ public:
   void setConstexpr(bool IC) {
     assert(!isa<ParmVarDecl>(this));
     NonParmVarDeclBits.IsConstexpr = IC;
+  }
+
+  /// Whether this variable is (C++ Concepts TS) concept.
+  bool isConcept() const {
+    return isa<ParmVarDecl>(this) ? false : NonParmVarDeclBits.IsConcept;
+  }
+  void setConcept(bool IC) {
+    assert(!isa<ParmVarDecl>(this));
+    NonParmVarDeclBits.IsConcept = IC;
   }
 
   /// Whether this variable is the implicit variable for a lambda init-capture.
@@ -2487,7 +2498,8 @@ public:
 /// IndirectFieldDecl - An instance of this class is created to represent a
 /// field injected from an anonymous union/struct into the parent scope.
 /// IndirectFieldDecl are always implicit.
-class IndirectFieldDecl : public ValueDecl {
+class IndirectFieldDecl : public ValueDecl,
+                          public Mergeable<IndirectFieldDecl> {
   void anchor() override;
   NamedDecl **Chaining;
   unsigned ChainingSize;
@@ -2524,6 +2536,9 @@ public:
     assert(ChainingSize >= 2);
     return dyn_cast<VarDecl>(*chain_begin());
   }
+
+  IndirectFieldDecl *getCanonicalDecl() override { return getFirstDecl(); }
+  const IndirectFieldDecl *getCanonicalDecl() const { return getFirstDecl(); }
 
   // Implement isa/cast/dyncast/etc.
   static bool classof(const Decl *D) { return classofKind(D->getKind()); }
@@ -2967,8 +2982,8 @@ public:
     assert(i < getNumTemplateParameterLists());
     return getExtInfo()->TemplParamLists[i];
   }
-  void setTemplateParameterListsInfo(ASTContext &Context, unsigned NumTPLists,
-                                     TemplateParameterList **TPLists);
+  void setTemplateParameterListsInfo(ASTContext &Context,
+                                     ArrayRef<TemplateParameterList *> TPLists);
 
   // Implement isa/cast/dyncast/etc.
   static bool classof(const Decl *D) { return classofKind(D->getKind()); }
@@ -3475,7 +3490,7 @@ private:
   Stmt *Body;
   TypeSourceInfo *SignatureAsWritten;
 
-  Capture *Captures;
+  const Capture *Captures;
   unsigned NumCaptures;
 
   unsigned ManglingNumber;
@@ -3581,10 +3596,8 @@ public:
 
   bool capturesVariable(const VarDecl *var) const;
 
-  void setCaptures(ASTContext &Context,
-                   const Capture *begin,
-                   const Capture *end,
-                   bool capturesCXXThis);
+  void setCaptures(ASTContext &Context, ArrayRef<Capture> Captures,
+                   bool CapturesCXXThis);
 
    unsigned getBlockManglingNumber() const {
      return ManglingNumber;

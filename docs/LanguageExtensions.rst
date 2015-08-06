@@ -1715,6 +1715,9 @@ The macros ``__ATOMIC_RELAXED``, ``__ATOMIC_CONSUME``, ``__ATOMIC_ACQUIRE``,
 provided, with values corresponding to the enumerators of C11's
 ``memory_order`` enumeration.
 
+(Note that Clang additionally provides GCC-compatible ``__atomic_*``
+builtins)
+
 Low-level ARM exclusive memory builtins
 ---------------------------------------
 
@@ -1991,10 +1994,10 @@ compile time. Partial unrolling replicates the loop body within the loop and
 reduces the trip count.
 
 If ``unroll(full)`` is specified the unroller will attempt to fully unroll the
-loop if the trip count is known at compile time. If the loop count is not known
-or the fully unrolled code size is greater than the limit specified by the
-`-pragma-unroll-threshold` command line option the loop will be partially
-unrolled subject to the same limit.
+loop if the trip count is known at compile time. If the fully unrolled code size
+is greater than an internal limit the loop will be partially unrolled up to this
+limit. If the loop count is not known at compile time the loop will not be
+unrolled.
 
 .. code-block:: c++
 
@@ -2006,7 +2009,7 @@ unrolled subject to the same limit.
 The unroll count can be specified explicitly with ``unroll_count(_value_)`` where
 _value_ is a positive integer. If this value is greater than the trip count the
 loop will be fully unrolled. Otherwise the loop is partially unrolled subject
-to the `-pragma-unroll-threshold` limit.
+to the same code size limit as with ``unroll(full)``.
 
 .. code-block:: c++
 

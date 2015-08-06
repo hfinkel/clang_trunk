@@ -360,6 +360,12 @@ def cxx_isystem : JoinedOrSeparate<["-"], "cxx-isystem">, Group<clang_i_Group>,
   MetaVarName<"<directory>">;
 def c : Flag<["-"], "c">, Flags<[DriverOption]>,
   HelpText<"Only run preprocess, compile, and assemble steps">;
+def cuda_device_only : Flag<["--"], "cuda-device-only">,
+  HelpText<"Do device-side CUDA compilation only">;
+def cuda_gpu_arch_EQ : Joined<["--"], "cuda-gpu-arch=">,
+  Flags<[DriverOption, HelpHidden]>, HelpText<"CUDA GPU architecture">;
+def cuda_host_only : Flag<["--"], "cuda-host-only">,
+  HelpText<"Do host-side CUDA compilation only">;
 def dA : Flag<["-"], "dA">, Group<d_Group>;
 def dD : Flag<["-"], "dD">, Group<d_Group>, Flags<[CC1Option]>,
   HelpText<"Print macro definitions in -E mode in addition to normal output">;
@@ -439,6 +445,9 @@ def fprofile_instr_use_EQ : Joined<["-"], "fprofile-instr-use=">,
 def fcoverage_mapping : Flag<["-"], "fcoverage-mapping">,
     Group<f_Group>, Flags<[CC1Option]>,
     HelpText<"Generate coverage mapping to enable code coverage analysis">;
+def fno_coverage_mapping : Flag<["-"], "fno-coverage-mapping">,
+    Group<f_Group>, Flags<[DriverOption]>,
+    HelpText<"Disable code coverage analysis">;
 def fprofile_generate : Flag<["-"], "fprofile-generate">,
     Alias<fprofile_instr_generate>;
 def fprofile_generate_EQ : Joined<["-"], "fprofile-generate=">,
@@ -449,6 +458,16 @@ def fprofile_use : Flag<["-"], "fprofile-use">, Group<f_Group>,
 def fprofile_use_EQ : Joined<["-"], "fprofile-use=">,
     Group<f_Group>, Flags<[DriverOption]>, MetaVarName<"<pathname>">,
     HelpText<"Use instrumentation data for profile-guided optimization. If pathname is a directory, it reads from <pathname>/default.profdata. Otherwise, it reads from file <pathname>.">;
+def fno_profile_instr_generate : Flag<["-"], "fno-profile-instr-generate">,
+    Group<f_Group>, Flags<[DriverOption]>,
+    HelpText<"Disable generation of profile instrumentation.">;
+def fno_profile_generate : Flag<["-"], "fno-profile-generate">,
+    Alias<fno_profile_instr_generate>;
+def fno_profile_instr_use : Flag<["-"], "fno-profile-instr-use">,
+    Group<f_Group>, Flags<[DriverOption]>,
+    HelpText<"Disable using instrumentation data for profile-guided optimization">;
+def fno_profile_use : Flag<["-"], "fno-profile-use">,
+    Alias<fno_profile_instr_use>;
 
 def fblocks : Flag<["-"], "fblocks">, Group<f_Group>, Flags<[CC1Option]>,
   HelpText<"Enable the 'blocks' language feature">;
@@ -513,9 +532,12 @@ def fno_elide_type : Flag<["-"], "fno-elide-type">, Group<f_Group>,
 def feliminate_unused_debug_symbols : Flag<["-"], "feliminate-unused-debug-symbols">, Group<f_Group>;
 def femit_all_decls : Flag<["-"], "femit-all-decls">, Group<f_Group>, Flags<[CC1Option]>,
   HelpText<"Emit all declarations, even if unused">;
+def femulated_tls : Flag<["-"], "femulated-tls">, Group<f_Group>, Flags<[CC1Option]>,
+  HelpText<"Use emutls functions to access thread_local variables">;
+def fno_emulated_tls : Flag<["-"], "fno-emulated-tls">, Group<f_Group>;
 def fencoding_EQ : Joined<["-"], "fencoding=">, Group<f_Group>;
 def ferror_limit_EQ : Joined<["-"], "ferror-limit=">, Group<f_Group>, Flags<[CoreOption]>;
-def fexceptions : Flag<["-"], "fexceptions">, Group<f_Group>, Flags<[CC1Option, CoreOption]>,
+def fexceptions : Flag<["-"], "fexceptions">, Group<f_Group>, Flags<[CC1Option]>,
   HelpText<"Enable support for exception handling">;
 def fexcess_precision_EQ : Joined<["-"], "fexcess-precision=">,
     Group<clang_ignored_gcc_optimization_f_Group>;
@@ -1094,6 +1116,13 @@ def gdwarf_3 : Flag<["-"], "gdwarf-3">, Group<g_Group>,
   HelpText<"Generate source-level debug information with dwarf version 3">, Flags<[CC1Option,CC1AsOption]>;
 def gdwarf_4 : Flag<["-"], "gdwarf-4">, Group<g_Group>,
   HelpText<"Generate source-level debug information with dwarf version 4">, Flags<[CC1Option,CC1AsOption]>;
+def gcodeview : Flag<["-"], "gcodeview">,
+  HelpText<"Generate CodeView debug information">,
+  Flags<[CC1Option, CC1AsOption, CoreOption]>;
+// Equivalent to our default dwarf version. Forces usual dwarf emission when
+// CodeView is enabled.
+def gdwarf : Flag<["-"], "gdwarf">, Alias<gdwarf_4>, Flags<[CoreOption]>;
+
 def gfull : Flag<["-"], "gfull">, Group<g_Group>;
 def gused : Flag<["-"], "gused">, Group<g_Group>;
 def gstabs : Joined<["-"], "gstabs">, Group<g_Group>, Flags<[Unsupported]>;
@@ -1351,6 +1380,13 @@ def mno_altivec : Flag<["-"], "mno-altivec">, Alias<fno_altivec>;
 
 def mvx : Flag<["-"], "mvx">, Group<m_Group>;
 def mno_vx : Flag<["-"], "mno-vx">, Group<m_Group>;
+
+def fzvector : Flag<["-"], "fzvector">, Group<f_Group>, Flags<[CC1Option]>,
+  HelpText<"Enable System z vector language extension">;
+def fno_zvector : Flag<["-"], "fno-zvector">, Group<f_Group>,
+  Flags<[CC1Option]>;
+def mzvector : Flag<["-"], "mzvector">, Alias<fzvector>;
+def mno_zvector : Flag<["-"], "mno-zvector">, Alias<fno_zvector>;
 
 def mno_warn_nonportable_cfstrings : Flag<["-"], "mno-warn-nonportable-cfstrings">, Group<m_Group>;
 def mno_omit_leaf_frame_pointer : Flag<["-"], "mno-omit-leaf-frame-pointer">, Group<m_Group>;
