@@ -6853,8 +6853,7 @@ void PNaClTargetInfo::getGCCRegAliases(const GCCRegAlias *&Aliases,
 class NaClMips32ELTargetInfo : public Mips32ELTargetInfo {
 public:
   NaClMips32ELTargetInfo(const llvm::Triple &Triple) :
-    Mips32ELTargetInfo(Triple)  {
-      MaxAtomicPromoteWidth = MaxAtomicInlineWidth = 0;
+    Mips32ELTargetInfo(Triple) {
   }
 
   BuiltinVaListKind getBuiltinVaListKind() const override {
@@ -7514,7 +7513,7 @@ static TargetInfo *AllocateTarget(const llvm::Triple &Triple) {
 }
 
 /// CreateTargetInfo - Return the target info object for the specified target
-/// triple.
+/// options.
 TargetInfo *
 TargetInfo::CreateTargetInfo(DiagnosticsEngine &Diags,
                              const std::shared_ptr<TargetOptions> &Opts) {
