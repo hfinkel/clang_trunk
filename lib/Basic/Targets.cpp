@@ -1070,14 +1070,25 @@ bool PPCTargetInfo::handleTargetFeatures(std::vector<std::string> &Features,
     // TODO: Finish this list and add an assert that we've handled them
     // all.
   }
-  if (!HasVSX && (HasP8Vector || HasDirectMove)) {
-    if (HasP8Vector)
-      Diags.Report(diag::err_opt_not_valid_with_opt) << "-mpower8-vector" <<
-                                                        "-mno-vsx";
-    else if (HasDirectMove)
-      Diags.Report(diag::err_opt_not_valid_with_opt) << "-mdirect-move" <<
-                                                        "-mno-vsx";
-    return false;
+
+  // Handle explicit options being passed to the compiler here: if we've
+  // explicitly turned off vsx and turned on power8-vector or direct-move then
+  // go ahead and error since the customer has expressed a somewhat incompatible
+  // set of options.
+  if (std::find(Features.begin(), Features.end(), "-vsx") != Features.end()) {
+    if (std::find(Features.begin(), Features.end(), "+power8-vector") !=
+        Features.end()) {
+      Diags.Report(diag::err_opt_not_valid_with_opt) << "-mpower8-vector"
+                                                     << "-mno-vsx";
+      return false;
+    }
+
+    if (std::find(Features.begin(), Features.end(), "+direct-move") !=
+        Features.end()) {
+      Diags.Report(diag::err_opt_not_valid_with_opt) << "-mdirect-move"
+                                                     << "-mno-vsx";
+      return false;
+    }
   }
 
   return true;
@@ -3795,11 +3806,7 @@ namespace {
 class MinGWX86_32TargetInfo : public WindowsX86_32TargetInfo {
 public:
   MinGWX86_32TargetInfo(const llvm::Triple &Triple)
-      : WindowsX86_32TargetInfo(Triple) {
-    LongDoubleWidth = 96;
-    LongDoubleAlign = 128;
-    LongDoubleFormat = &llvm::APFloat::x87DoubleExtended;
-  }
+      : WindowsX86_32TargetInfo(Triple) {}
   void getTargetDefines(const LangOptions &Opts,
                         MacroBuilder &Builder) const override {
     WindowsX86_32TargetInfo::getTargetDefines(Opts, Builder);
@@ -4029,10 +4036,7 @@ public:
 class MinGWX86_64TargetInfo : public WindowsX86_64TargetInfo {
 public:
   MinGWX86_64TargetInfo(const llvm::Triple &Triple)
-      : WindowsX86_64TargetInfo(Triple) {
-    LongDoubleWidth = LongDoubleAlign = 128;
-    LongDoubleFormat = &llvm::APFloat::x87DoubleExtended;
-  }
+      : WindowsX86_64TargetInfo(Triple) {}
   void getTargetDefines(const LangOptions &Opts,
                         MacroBuilder &Builder) const override {
     WindowsX86_64TargetInfo::getTargetDefines(Opts, Builder);
@@ -5194,6 +5198,7 @@ public:
     // PCS specifies this for SysV variants, which is all we support. Other ABIs
     // may choose __ARM_FP16_FORMAT_ALTERNATIVE.
     Builder.defineMacro("__ARM_FP16_FORMAT_IEEE");
+    Builder.defineMacro("__ARM_FP16_ARGS");
 
     if (Opts.FastMath || Opts.FiniteMathOnly)
       Builder.defineMacro("__ARM_FP_FAST");
