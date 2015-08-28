@@ -49,10 +49,7 @@ extern "C" {
 #if defined(__MMX__)
 /* And the random ones that aren't in those files. */
 __m64 _m_from_float(float);
-__m64 _m_from_int(int _l);
-void _m_prefetch(void *);
 float _m_to_float(__m64);
-int _m_to_int(__m64 _M);
 #endif
 
 /* Other assorted instruction intrinsics. */
@@ -462,6 +459,26 @@ static __inline__ unsigned short __DEFAULT_FN_ATTRS
 _rotr16(unsigned short _Value, unsigned char _Shift) {
   _Shift &= 0xf;
   return _Shift ? (_Value >> _Shift) | (_Value << (16 - _Shift)) : _Value;
+}
+static __inline__ unsigned int __DEFAULT_FN_ATTRS
+_rotl(unsigned int _Value, int _Shift) {
+  _Shift &= 0x1f;
+  return _Shift ? (_Value << _Shift) | (_Value >> (32 - _Shift)) : _Value;
+}
+static __inline__ unsigned int __DEFAULT_FN_ATTRS
+_rotr(unsigned int _Value, int _Shift) {
+  _Shift &= 0x1f;
+  return _Shift ? (_Value >> _Shift) | (_Value << (32 - _Shift)) : _Value;
+}
+static __inline__ unsigned long __DEFAULT_FN_ATTRS
+_lrotl(unsigned long _Value, int _Shift) {
+  _Shift &= 0x1f;
+  return _Shift ? (_Value << _Shift) | (_Value >> (32 - _Shift)) : _Value;
+}
+static __inline__ unsigned long __DEFAULT_FN_ATTRS
+_lrotr(unsigned long _Value, int _Shift) {
+  _Shift &= 0x1f;
+  return _Shift ? (_Value >> _Shift) | (_Value << (32 - _Shift)) : _Value;
 }
 static
 __inline__ unsigned __int64 __DEFAULT_FN_ATTRS

@@ -3519,6 +3519,10 @@ TEST_F(FormatTest, ConstructorInitializers) {
                "    : Inttializer(FitsOnTheLine) {}",
                getLLVMStyleWithColumns(43));
 
+  verifyFormat("template <typename T>\n"
+               "Constructor() : Initializer(FitsOnTheLine) {}",
+               getLLVMStyleWithColumns(45));
+
   verifyFormat(
       "SomeClass::Constructor()\n"
       "    : aaaaaaaaaaaaa(aaaaaaaaaaaaaa), aaaaaaaaaaaaaaa(aaaaaaaaaaaa) {}");
@@ -3531,6 +3535,9 @@ TEST_F(FormatTest, ConstructorInitializers) {
       "SomeClass::Constructor()\n"
       "    : aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa(aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa),\n"
       "      aaaaaaaaaaaaaaa(aaaaaaaaaaaa) {}");
+  verifyFormat("Constructor(aaaaaa aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,\n"
+               "            aaaaaa aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)\n"
+               "    : aaaaaaaaaa(aaaaaa) {}");
 
   verifyFormat("Constructor()\n"
                "    : aaaaaaaaaaaaaaaaaaaaaaaa(aaaaaaaaaaaaaaaaaaaaaaaaaaa),\n"
@@ -5320,36 +5327,39 @@ TEST_F(FormatTest, UnderstandsOverloadedOperators) {
 }
 
 TEST_F(FormatTest, UnderstandsFunctionRefQualification) {
-  verifyFormat("Deleted &operator=(const Deleted &)& = default;");
-  verifyFormat("Deleted &operator=(const Deleted &)&& = delete;");
-  verifyFormat("SomeType MemberFunction(const Deleted &)& = delete;");
-  verifyFormat("SomeType MemberFunction(const Deleted &)&& = delete;");
-  verifyFormat("Deleted &operator=(const Deleted &)&;");
-  verifyFormat("Deleted &operator=(const Deleted &)&&;");
-  verifyFormat("SomeType MemberFunction(const Deleted &)&;");
-  verifyFormat("SomeType MemberFunction(const Deleted &)&&;");
-  verifyFormat("SomeType MemberFunction(const Deleted &)&& {}");
-  verifyFormat("SomeType MemberFunction(const Deleted &)&& final {}");
-  verifyFormat("SomeType MemberFunction(const Deleted &)&& override {}");
+  verifyFormat("Deleted &operator=(const Deleted &) & = default;");
+  verifyFormat("Deleted &operator=(const Deleted &) && = delete;");
+  verifyFormat("SomeType MemberFunction(const Deleted &) & = delete;");
+  verifyFormat("SomeType MemberFunction(const Deleted &) && = delete;");
+  verifyFormat("Deleted &operator=(const Deleted &) &;");
+  verifyFormat("Deleted &operator=(const Deleted &) &&;");
+  verifyFormat("SomeType MemberFunction(const Deleted &) &;");
+  verifyFormat("SomeType MemberFunction(const Deleted &) &&;");
+  verifyFormat("SomeType MemberFunction(const Deleted &) && {}");
+  verifyFormat("SomeType MemberFunction(const Deleted &) && final {}");
+  verifyFormat("SomeType MemberFunction(const Deleted &) && override {}");
 
-  verifyGoogleFormat("Deleted& operator=(const Deleted&)& = default;");
-  verifyGoogleFormat("SomeType MemberFunction(const Deleted&)& = delete;");
-  verifyGoogleFormat("Deleted& operator=(const Deleted&)&;");
-  verifyGoogleFormat("SomeType MemberFunction(const Deleted&)&;");
+  FormatStyle AlignLeft = getLLVMStyle();
+  AlignLeft.PointerAlignment = FormatStyle::PAS_Left;
+  verifyFormat("Deleted& operator=(const Deleted&) & = default;", AlignLeft);
+  verifyFormat("SomeType MemberFunction(const Deleted&) & = delete;",
+               AlignLeft);
+  verifyFormat("Deleted& operator=(const Deleted&) &;", AlignLeft);
+  verifyFormat("SomeType MemberFunction(const Deleted&) &;", AlignLeft);
 
   FormatStyle Spaces = getLLVMStyle();
   Spaces.SpacesInCStyleCastParentheses = true;
-  verifyFormat("Deleted &operator=(const Deleted &)& = default;", Spaces);
-  verifyFormat("SomeType MemberFunction(const Deleted &)& = delete;", Spaces);
-  verifyFormat("Deleted &operator=(const Deleted &)&;", Spaces);
-  verifyFormat("SomeType MemberFunction(const Deleted &)&;", Spaces);
+  verifyFormat("Deleted &operator=(const Deleted &) & = default;", Spaces);
+  verifyFormat("SomeType MemberFunction(const Deleted &) & = delete;", Spaces);
+  verifyFormat("Deleted &operator=(const Deleted &) &;", Spaces);
+  verifyFormat("SomeType MemberFunction(const Deleted &) &;", Spaces);
 
   Spaces.SpacesInCStyleCastParentheses = false;
   Spaces.SpacesInParentheses = true;
-  verifyFormat("Deleted &operator=( const Deleted & )& = default;", Spaces);
-  verifyFormat("SomeType MemberFunction( const Deleted & )& = delete;", Spaces);
-  verifyFormat("Deleted &operator=( const Deleted & )&;", Spaces);
-  verifyFormat("SomeType MemberFunction( const Deleted & )&;", Spaces);
+  verifyFormat("Deleted &operator=( const Deleted & ) & = default;", Spaces);
+  verifyFormat("SomeType MemberFunction( const Deleted & ) & = delete;", Spaces);
+  verifyFormat("Deleted &operator=( const Deleted & ) &;", Spaces);
+  verifyFormat("SomeType MemberFunction( const Deleted & ) &;", Spaces);
 }
 
 TEST_F(FormatTest, UnderstandsNewAndDelete) {
@@ -5588,11 +5598,11 @@ TEST_F(FormatTest, UnderstandsUsesOfStarAndAmp) {
 
   // Member function reference qualifiers aren't binary operators.
   verifyFormat("string // break\n"
-               "operator()()& {}");
+               "operator()() & {}");
   verifyFormat("string // break\n"
-               "operator()()&& {}");
+               "operator()() && {}");
   verifyGoogleFormat("template <typename T>\n"
-                     "auto x()& -> int {}");
+                     "auto x() & -> int {}");
 }
 
 TEST_F(FormatTest, UnderstandsAttributes) {
