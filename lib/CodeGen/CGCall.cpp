@@ -1497,21 +1497,26 @@ void CodeGenModule::ConstructAttributeList(const CGFunctionInfo &FI,
     // parse that and add it to the feature set.
     StringRef TargetCPU = getTarget().getTargetOpts().CPU;
     const FunctionDecl *FD = dyn_cast_or_null<FunctionDecl>(TargetDecl);
-    if (FD && FD->getAttr<TargetAttr>()) {
+    if (FD && FD->hasAttr<TargetAttr>()) {
       llvm::StringMap<bool> FeatureMap;
+      auto *TD = FD->getAttr<TargetAttr>();
+
+      // Make a copy of the features as passed on the command line.
+      std::vector<std::string> FnFeatures =
+          getTarget().getTargetOpts().FeaturesAsWritten;
+
+      std::vector<std::string> &AttrFeatures = TD->getFeatures();
+      std::copy(AttrFeatures.begin(), AttrFeatures.end(),
+                std::back_inserter(FnFeatures));
+
+      if (TD->getCPU() != "")
+	TargetCPU = TD->getCPU();
 
       // Now populate the feature map, first with the TargetCPU which is either
       // the default or a new one from the target attribute string. Then we'll
       // use the passed in features (FeaturesAsWritten) along with the new ones
       // from the attribute.
-      TargetInfo::ParsedTargetAttr PTA =
-          getTarget().parseTargetAttr(FD->getAttr<TargetAttr>());
-      if (PTA.first != "")
-	TargetCPU = PTA.first;
-      PTA.second.insert(PTA.second.begin(),
-                        getTarget().getTargetOpts().FeaturesAsWritten.begin(),
-                        getTarget().getTargetOpts().FeaturesAsWritten.end());
-      getTarget().initFeatureMap(FeatureMap, Diags, TargetCPU, PTA.second);
+      getTarget().initFeatureMap(FeatureMap, Diags, TargetCPU, FnFeatures);
 
       // Produce the canonical string for this set of features.
       std::vector<std::string> Features;
